@@ -1,0 +1,60 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "济南水务登录",
+        "description": "请填写您的济南水务微信小程序账号信息",
+        "data": {
+          "openid": "OpenID",
+          "unionid": "UnionID",
+          "user_name": "姓名",
+          "phone_num": "手机号"
+        }
+      },
+      "select_gs": {
+        "title": "选择户号",
+        "description": "请选择要添加的用水户号",
+        "data": {
+          "selected_gs": "户号"
+        }
+      }
+    },
+    "error": {
+      "api_connection_failed": "无法连接到济南水务服务器",
+      "no_bangding_data": "未获取到绑定的户号信息",
+      "no_gs_selected": "请至少选择一个户号"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "修改济南水务配置",
+        "description": "修改您的济南水务账号信息",
+        "data": {
+          "openid": "OpenID",
+          "unionid": "UnionID",
+          "user_name": "姓名",
+          "phone_num": "手机号"
+        }
+      },
+      "select_gs": {
+        "title": "选择户号",
+        "description": "请选择要添加的用水户号",
+        "data": {
+          "selected_gs": "户号"
+        }
+      }
+    },
+    "error": {
+      "api_connection_failed": "无法连接到济南水务服务器",
+      "no_bangding_data": "未获取到绑定的户号信息",
+      "no_gs_selected": "请至少选择一个户号"
+    }
+  },
+  "services": {
+    "refresh_data": {
+      "name": "手动刷新水务数据",
+      "description": "立即拉取最新水表、水费信息"
+    }
+  }
+}

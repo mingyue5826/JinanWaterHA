@@ -1,0 +1,12 @@
+{
+  "domain": "jinan_water",
+  "name": "济南水务",
+  "version": "0.1.0",
+  "config_flow": true,
+  "iot_class": "cloud_polling",
+  "dependencies": [],
+  "requirements": [],
+  "codeowners": ["@mingyue5826"],
+  "documentation": "https://github.com/mingyue5826/JinanWaterHA",
+  "issue_tracker": "https://github.com/mingyue5826/JinanWaterHA/issues"
+}
