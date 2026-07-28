@@ -235,11 +235,18 @@ class JinanWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             result = await response.json()
 
-            # 检查业务状态码
-            if not result.get("state") or result.get("Code") != 1:
-                raise Exception(result.get("messageText", "API 返回错误"))
+            # 检查 data 字段是否存在且不为 null
+            data = result.get("data")
+            if data is None:
+                # 兼容大小写 State / state
+                state = result.get("state") or result.get("State")
+                if not state:
+                    raise Exception(
+                        f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}"
+                    )
+                return []
 
-            return result.get("data", [])
+            return data
 
     @staticmethod
     @callback
@@ -325,9 +332,16 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
                     if response.status != 200:
                         raise Exception(f"API 请求失败，状态码: {response.status}")
                     result = await response.json()
-                    if not result.get("state") or result.get("Code") != 1:
-                        raise Exception(result.get("messageText", "API 返回错误"))
-                    self._bangding_list = result.get("data", [])
+                    data = result.get("data")
+                    if data is None:
+                        state = result.get("state") or result.get("State")
+                        if not state:
+                            raise Exception(
+                                f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}"
+                            )
+                        self._bangding_list = []
+                    else:
+                        self._bangding_list = data
             except Exception:
                 errors["base"] = "api_connection_failed"
             else:

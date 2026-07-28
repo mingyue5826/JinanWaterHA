@@ -51,6 +51,7 @@ from .const import (
     APPLICATION_ID,
     API_BASE_URL,
     API_ENDPOINT,
+    API_ENDPOINT_FAPIAO,
     SERVICE_REFRESH_DATA,
 )
 
@@ -176,26 +177,28 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
     济南水务数据更新协调器。
 
     继承自 DataUpdateCoordinator，负责：
-      1. 定期调用济南水务 API 获取用户绑定的户号数据
-      2. 过滤出用户选择的户号数据
-      3. 将数据缓存并通知所有订阅的传感器实体更新
+      1. 调用 GetBangDingList API 获取账户级数据（余额、户名、地址等）
+      2. 调用 GetFaPiaoList API 获取账单级数据（本期用量、水费、抄表数等）
+      3. 合并两个 API 的数据，返回 {户号: 合并数据} 字典
+      4. 通知所有订阅的传感器实体更新
 
-    === 工作原理 ===
+    === 数据来源说明 ===
 
-    HA 会按照 update_interval 指定的时间间隔调用 async_update_data()。
-    该方法返回的数据会被存储在 self.data 中，
-    所有继承了 CoordinatorEntity 的传感器会自动收到通知并刷新。
-
-    数据流程：
-      API 响应 → async_update_data() 过滤 → self.data → 传感器 native_value
-
-    === 第三方 API 调用说明 ===
-
-    本集成调用济南水务微信小程序的后端 API：
-      - 接口地址: https://yx.jinanwater.cn/shoufeizjj3/api/WxProgramApi/GetBangDingList
-      - 请求方式: POST
-      - 认证方式: 通过 openid、unionid 请求头 + Cookie 中的 UserInfo 进行身份验证
-      - 返回格式: JSON，data 字段为户号信息列表
+    | 字段 | 来源 | 说明 |
+    |------|------|------|
+    | yue (余额) | GetBangDingList | 账户级数据 |
+    | hm (户名) | GetBangDingList | 账户级数据 |
+    | mp (地址) | GetBangDingList | 账户级数据 |
+    | keHuDaiBiao (客户代表) | GetBangDingList | 账户级数据 |
+    | keHuDaiBiaoDH (客户代表电话) | GetBangDingList | 账户级数据 |
+    | qfje (欠费金额) | GetBangDingList | 账户级数据 |
+    | wyj (违约金) | GetBangDingList | 账户级数据 |
+    | xzsl/sl (本期用量) | GetFaPiaoList | 账单级数据 |
+    | xzje/zje (本期水费) | GetFaPiaoList | 账单级数据 |
+    | qd (上次表数) | GetFaPiaoList | 账单级数据 |
+    | zd (本次表数) | GetFaPiaoList | 账单级数据 |
+    | r1 (抄表日期) | GetFaPiaoList | 账单级数据 |
+    | xzrq (缴费时间) | GetFaPiaoList | 账单级数据 |
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
@@ -205,12 +208,6 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
         :param hass: HomeAssistant 实例
         :param entry: ConfigEntry，包含用户配置的 openid、unionid 等信息
         """
-        # 调用父类初始化
-        # - hass: HA 实例
-        # - _LOGGER: 日志记录器，协调器内部会用它记录日志
-        # - name: 协调器名称，用于日志和调试
-        # - update_method: 数据更新方法，HA 会周期性调用它
-        # - update_interval: 更新间隔，这里设置为 60 分钟
         super().__init__(
             hass,
             _LOGGER,
@@ -218,105 +215,172 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
             update_method=self.async_update_data,
             update_interval=timedelta(minutes=60),
         )
-        # 保存 config entry 引用，用于在 async_update_data 中读取配置数据
         self.entry = entry
 
-    async def async_update_data(self):
+    def _get_auth_headers(self):
         """
-        数据更新方法。
+        构造通用的 API 认证请求头。
 
-        由 DataUpdateCoordinator 按照设定的间隔自动调用。
-        负责调用济南水务 API，过滤用户选择的户号数据并返回。
+        两个 API 都需要相同的认证信息：
+        - openid / unionid: 微信小程序身份标识
+        - cookie: 包含 URL 编码的 UserInfo JSON
 
-        === 返回值要求 ===
-
-        返回值会被存储在 self.data 中，供传感器实体读取。
-        这里返回一个字典，格式为 {户号: 户号数据字典}：
-          {
-              "6422376": {"gs": "6422376", "hm": "*明月", "yue": 65.6, ...},
-              "6422378": {"gs": "6422378", "hm": "张三", "yue": 120.0, ...},
-          }
-
-        === 异常处理 ===
-
-        如果 API 调用失败，应抛出 UpdateFailed 异常。
-        HA 会捕获此异常并标记实体为不可用，同时按照策略进行重试。
-
-        :return: 过滤后的户号数据字典
-        :raises UpdateFailed: 当 API 调用失败时抛出
+        :return: 请求头字典
         """
-        # 从 config entry 中读取用户配置的认证信息
         data = self.entry.data
         openid = data[CONF_OPENID]
         unionid = data[CONF_UNIONID]
         user_name = data[CONF_USER_NAME]
-        phone_num = data[CONF_PHONE_NUM]
-        # 用户在配置流中选择的户号列表
-        selected_gs = data.get(CONF_SELECTED_GS, [])
 
-        # 获取 HA 内置的 aiohttp ClientSession
-        # 使用 HA 提供的 session 而非自行创建，这样 HA 可以统一管理连接池
-        session = async_get_clientsession(self.hass)
-
-        # 构造 API 请求 URL
-        # PhoneNum 作为查询参数传入
-        url = f"{API_BASE_URL}{API_ENDPOINT}?PhoneNum={phone_num}"
-
-        # 构造 Cookie 中的 UserInfo
-        # API 需要 Cookie 中携带 UserInfo，格式为 URL 编码的 JSON
-        # 原始 JSON: {"UserName": "用户名", "ApplicationId": "应用ID"}
         user_info = {"UserName": user_name, "ApplicationId": APPLICATION_ID}
-        # 使用 urllib.parse.quote 对 JSON 字符串进行 URL 编码
         cookie_value = f"UserInfo={urllib.parse.quote(json.dumps(user_info))}"
 
-        # 构造请求头
-        # openid 和 unionid 是微信小程序的身份标识，用于 API 认证
-        headers = {
+        return {
             "openid": openid,
             "unionid": unionid,
             "cookie": cookie_value,
             "Content-Type": "application/json",
         }
 
+    async def _call_api(self, session, url, headers):
+        """
+        发送 API 请求并返回解析后的 JSON 数据。
+
+        :param session: aiohttp ClientSession
+        :param url: 请求 URL
+        :param headers: 请求头
+        :return: 响应 data 字段内容
+        :raises UpdateFailed: 当请求失败时抛出
+        """
+        async with session.post(url, headers=headers, data="{}") as response:
+            if response.status != 200:
+                raise UpdateFailed(f"API 请求失败，HTTP 状态码: {response.status}")
+
+            result = await response.json()
+
+            # 检查 data 字段是否存在且不为 null
+            data = result.get("data")
+            if data is None:
+                # 兼容大小写 State / state
+                state = result.get("state") or result.get("State")
+                if not state:
+                    raise UpdateFailed(
+                        f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}"
+                    )
+                _LOGGER.debug("API 返回 data=null，URL: %s", url.split("?")[0])
+                return []
+
+            return data
+
+    async def _fetch_account_data(self, session, phone_num, headers):
+        """
+        调用 GetBangDingList API 获取账户级数据。
+
+        返回所有绑定户号的基本信息。
+
+        :param session: aiohttp ClientSession
+        :param phone_num: 手机号
+        :param headers: 请求头
+        :return: 户号列表 [{gs, hm, mp, yue, ...}, ...]
+        """
+        url = f"{API_BASE_URL}{API_ENDPOINT}?PhoneNum={phone_num}"
+        return await self._call_api(session, url, headers)
+
+    async def _fetch_invoice_data(self, session, gs, headers):
+        """
+        调用 GetFaPiaoList API 获取单个户号的账单级数据。
+
+        返回该户号最新一期的账单详情。
+
+        :param session: aiohttp ClientSession
+        :param gs: 户号
+        :param headers: 请求头
+        :return: 账单列表 [{gs, xzsl, xzje, qd, zd, r1, xzrq, ...}, ...]
+        """
+        url = f"{API_BASE_URL}{API_ENDPOINT_FAPIAO}?GS={gs}"
+        return await self._call_api(session, url, headers)
+
+    async def async_update_data(self):
+        """
+        数据更新方法。
+
+        按以下步骤获取数据并合并：
+          1. 调用 GetBangDingList 获取所有账户数据
+          2. 过滤出用户选择的户号
+          3. 对每个选择的户号调用 GetFaPiaoList 获取账单数据
+          4. 合并账户数据和账单数据
+
+        === 返回数据格式 ===
+
+        {
+            "6422376": {
+                # 来自 GetBangDingList 的字段
+                "hm": "*明月", "mp": "地址", "yue": 65.6,
+                "qfje": 0.0, "wyj": 0.0, "dj": 4.2,
+                "keHuDaiBiao": "李明辉", "keHuDaiBiaoDH": "186****1826",
+                # 来自 GetFaPiaoList 的字段
+                "xzsl": 32, "xzje": 134.4, "zje": 134.4,
+                "qd": 93, "zd": 125,
+                "r1": "2026-07-01T00:00:00",
+                "xzrq": "2026-07-22T17:49:12.5",
+                "mx": [...]  # 费用明细
+            },
+            ...
+        }
+
+        :return: 合并后的户号数据字典
+        :raises UpdateFailed: 当 API 调用失败时抛出
+        """
+        data = self.entry.data
+        phone_num = data[CONF_PHONE_NUM]
+        selected_gs = data.get(CONF_SELECTED_GS, [])
+
+        session = async_get_clientsession(self.hass)
+        headers = self._get_auth_headers()
+
         try:
-            # 发送 POST 请求
-            # data="{}" 是请求体，API 需要一个空的 JSON 对象
-            async with session.post(url, headers=headers, data="{}") as response:
-                # 检查 HTTP 状态码
-                if response.status != 200:
-                    raise UpdateFailed(
-                        f"API 请求失败，HTTP 状态码: {response.status}"
-                    )
+            # 步骤 1: 获取账户级数据（所有绑定户号）
+            account_list = await self._fetch_account_data(session, phone_num, headers)
 
-                # 解析 JSON 响应
-                result = await response.json()
+            # 步骤 2: 过滤出用户选择的户号
+            account_data = {}
+            for item in account_list:
+                gs = item.get("gs")
+                if gs in selected_gs:
+                    account_data[gs] = item
 
-                # 检查业务状态码
-                # - state: true 表示请求成功
-                # - Code: 1 表示业务处理成功
-                if not result.get("state") or result.get("Code") != 1:
-                    raise UpdateFailed(
-                        result.get("messageText", "API 返回错误")
-                    )
+            # 步骤 3: 获取每个户号的账单级数据
+            invoice_data = {}
+            for gs in selected_gs:
+                try:
+                    invoice_list = await self._fetch_invoice_data(session, gs, headers)
+                    if invoice_list:
+                        invoice_data[gs] = invoice_list[0]
+                        _LOGGER.debug("户号 %s 账单: xzsl=%s, xzje=%s", 
+                                     gs, invoice_list[0].get("xzsl"), invoice_list[0].get("xzje"))
+                except Exception as error:
+                    _LOGGER.warning("获取户号 %s 账单失败: %s", gs, error)
 
-                # 获取所有户号数据列表
-                all_data = result.get("data", [])
+            # 步骤 4: 合并数据（只提取账单级字段，避免覆盖账户级字段如 yue）
+            # 账户级字段：yue, hm, mp, dj, qfje, wyj, keHuDaiBiao, keHuDaiBiaoDH
+            # 账单级字段：xzsl, xzje, zje, qd, zd, r1, xzrq, sl, mx
+            INVOICE_FIELDS = ["xzsl", "xzje", "zje", "qd", "zd", "r1", "xzrq", "sl", "mx"]
+            
+            merged_data = {}
+            for gs in selected_gs:
+                merged = {}
+                if gs in account_data:
+                    merged.update(account_data[gs])
+                if gs in invoice_data:
+                    # 只提取账单级字段，避免覆盖 yue 等账户级字段
+                    for key in INVOICE_FIELDS:
+                        if key in invoice_data[gs]:
+                            merged[key] = invoice_data[gs][key]
+                merged_data[gs] = merged
 
-                # 过滤出用户选择的户号
-                # API 返回所有绑定的户号，但用户可能只选择了其中几个
-                # 过滤后的数据格式: {户号: 户号数据}
-                filtered_data = {}
-                for item in all_data:
-                    gs = item.get("gs")
-                    if gs in selected_gs:
-                        filtered_data[gs] = item
-
-                return filtered_data
+            return merged_data
 
         except UpdateFailed:
-            # UpdateFailed 异常直接向上抛出
             raise
         except Exception as error:
-            # 其他异常包装为 UpdateFailed
-            # 这样 HA 可以正确处理并显示错误状态
             raise UpdateFailed(f"获取水务数据时出错: {error}")

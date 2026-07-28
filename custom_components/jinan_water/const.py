@@ -61,9 +61,13 @@ APPLICATION_ID = "67532d903748124e443298ca"
 API_BASE_URL = "https://yx.jinanwater.cn"
 
 # API 接口路径
-# GetBangDingList 接口用于获取用户绑定的所有户号信息
+# GetBangDingList 接口用于获取用户绑定的所有户号信息（账户级数据）
 # 完整请求地址: https://yx.jinanwater.cn/shoufeizjj3/api/WxProgramApi/GetBangDingList
 API_ENDPOINT = "/shoufeizjj3/api/WxProgramApi/GetBangDingList"
+
+# GetFaPiaoList 接口用于获取单个户号的账单/用量详情（本期数据）
+# 请求地址: https://yx.jinanwater.cn/shoufeizjj3/api/WxProgramApi/GetFaPiaoList?GS=户号
+API_ENDPOINT_FAPIAO = "/shoufeizjj3/api/WxProgramApi/GetFaPiaoList"
 
 # ============================================================
 # 服务名称常量
