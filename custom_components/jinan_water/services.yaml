@@ -1,0 +1,7 @@
+refresh_data:
+  name: 刷新数据
+  description: 手动刷新济南水务的传感器数据
+  target:
+    entity:
+      integration: jinan_water
+      domain: button
