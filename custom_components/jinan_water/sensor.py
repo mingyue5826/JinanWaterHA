@@ -4,7 +4,7 @@
 
 import logging
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (SensorEntity,SensorStateClass,SensorDeviceClass)
 from homeassistant.const import UnitOfVolume
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -245,6 +245,9 @@ class WaterMeterPrevSensor(JinanWaterBaseSensor):
 class WaterMeterCurrSensor(JinanWaterBaseSensor):
     _sensor_key = "meter_curr"
     _attr_name = "本次表数"
+    _attr_icon = "mdi:speedometer-slow"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
 
     @property
