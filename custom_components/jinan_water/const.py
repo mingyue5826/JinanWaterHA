@@ -80,6 +80,9 @@ API_ENDPOINT_GetDataList = "/shoufeizjj3/api/WxProgramApi/GetDataList"
 # 合并数据中使用的数据键：实时仪表日用水记录列表
 YIBIAO_DATA_KEY = "yibiao_data"
 
+# 合并数据中使用的数据键：订单（账单）详情列表（全量记录，已筛选并重命名字段）
+ORDER_DETAIL_KEY = "order_detail"
+
 # ============================================================
 # 服务名称常量
 # 用于注册自定义服务，用户可在 HA "开发者工具 > 服务" 中调用

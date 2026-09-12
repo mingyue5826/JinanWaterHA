@@ -25,11 +25,81 @@ from .const import (
     API_ENDPOINT_GetYiBiaoInfo,
     API_ENDPOINT_GetDataList,
     YIBIAO_DATA_KEY,
+    ORDER_DETAIL_KEY,
     SERVICE_REFRESH_DATA,
 )
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor", "button"]
+
+# ============================================================
+# 发票（账单）记录字段映射：原字段 -> 新字段（按需求.md 重命名）
+# 仅保留下方列出的字段，其余字段（如 b2/bl/zq/bc/fph）会被过滤掉
+# ============================================================
+INVOICE_FIELD_MAP = {
+    "id": "id",                       # 账单记录唯一 ID
+    "gs": "gs",                       # 户号
+    "bm": "meter_number",             # 原 bm=水表编号（避免与 number 序号混淆）
+    "hm": "username",                 # 户名
+    "mp": "address",                  # 用水地址
+    "jtbz": "is_tiered_price",        # 是否阶梯水价（true/false）
+    "sljs": "person_base",            # 人口基数（阶梯水价核算用）
+    "dj": "unit_price",               # 水价（元/m³）
+    "r1": "read_date",                # 抄表日期（按日统计，保留接口原始值）
+    "xzbz": "write_off_num",          # 销账编号
+    "xzrq": "write_off_time",         # 销账时间（原 write_off_date；实为时间格式，保留原始值）
+    "fpje": "invoice_amount",         # 发票金额（元）
+    "wyj": "penalty_fee",             # 违约金（元）
+    "xzsl": "write_off_usage",        # 销账水量（m³）（原 xzsl，修正 useage->usage 拼写）
+    "xzje": "write_off_amount",       # 销账金额（元）
+    "zje": "total_amount",            # 总金额（元）
+    "dzfplqrq": "invoice_apply_time", # 发票领取时间（原 invoice_apply_date；保留接口原始值）
+    "dzfpzt": "invoice_status",       # 发票状态（如：未开票）
+    "ysjlzt": "status",               # 用水记录状态（如：YH=已核）
+    "fplx": "invoice_type",           # 发票类型（如：增值税普通电子发票）
+    "jffs": "pay_type",               # 缴费方式
+    "yyzd": "pay_channel",            # 缴费渠道
+    "dzfpdm": "invoice_code",         # 电子发票代码
+    "dzfphm": "invoice_num",          # 电子发票号码
+    "dzfpjym": "invoice_check_code",  # 电子发票校验码
+    "dzfpsqdm": "invoice_apply_code", # 电子发票申请代码
+    "fpsqlsh": "invoice_pipeline_num",# 发票申请流水号
+    "scye": "balance_last",           # 上期余额（元）
+    "bcye": "balance_current",        # 本期余额（元）
+    "qd": "read_last",                # 上次表数（m³）
+    "zd": "read_current",             # 本次表数（m³）
+    "sl": "used_current",             # 本期用水量（m³）
+    "smDate": "bill_month",           # 账单月份（如：2026-09）
+    "nlsl": "nlsl",                   # TODO: 年累计用水量字段待确认（当前 nlsl 实际并非年累计水量），确认后启用 WaterYearlyUsageSensor 取值
+    "yue": "balance",                 # 账户余额（元）
+}
+
+
+# 明细(mx)字段映射：原字段 -> 新字段（费用明细的每一条子项）
+INVOICE_MX_FIELD_MAP = {
+    "hh": "index",         # 明细序号
+    "xmmc": "name",        # 费用项目名称（如：一阶基本水费 / 水资源费 / 污水处理费）
+    "dw": "unit",          # 计量单位（如：立方米）
+    "xmsl": "total",       # 数量（用量）
+    "xmdj": "unit_price",  # 单价（元）
+    "xmje": "amount",      # 金额（元）
+}
+
+def _transform_invoice_record(raw):
+    """将单条原始账单记录筛选并重命名为对外暴露的结构（list[dict] 的元素）。"""
+    result = {}
+    for src, dst in INVOICE_FIELD_MAP.items():
+        if src not in raw:
+            continue
+        result[dst] = raw[src]
+
+    mx = raw.get("mx")
+    if isinstance(mx, list):
+        result["detail"] = [
+            {dst: item.get(src) for src, dst in INVOICE_MX_FIELD_MAP.items() if src in item}
+            for item in mx
+        ]
+    return result
 
 
 async def async_setup(hass: HomeAssistant, config):
@@ -208,20 +278,20 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                 if gs in selected_gs:
                     account_data[gs] = item
 
-            # 步骤 3: 获取每个户号的账单级数据
+            # 步骤 3: 获取每个户号的账单级数据（保留全部记录，供订单详情传感器使用）
             invoice_data = {}
             for gs in selected_gs:
                 try:
                     invoice_url = f"{API_BASE_URL}{API_ENDPOINT_FAPIAO}?GS={gs}"
                     invoice_list = await self._call_api(session, invoice_url, headers)
-                    invoice_list = invoice_list.get("data")
-                    if invoice_list:
-                        # todo 发票接口返回的是多次结果，其中的r1代表本次统计的抄表日期
-                        invoice_data[gs] = invoice_list[0]
+                    invoice_list = invoice_list.get("data") or []
+                    # todo 发票接口返回的是多次结果，其中的r1代表本次统计的抄表日期
+                    invoice_data[gs] = invoice_list
                 except Exception as error:
                     _LOGGER.warning("获取户号 %s 账单失败: %s", gs, error)
+                    invoice_data[gs] = []
 
-            # 步骤 4: 合并数据
+            # 步骤 4: 合并数据（现有账单级传感器仍使用第一条记录，保持原有行为）
             # xzsl(sl)     usage        本期用水量
             # xzje(zje)    current_fee  本期水费
             # mx                        明细
@@ -229,17 +299,18 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
             # zd           meter_curr   本次表数
             # r1           meter_date   抄表日期
             # xzrq         payment_date 缴费时间
-            INVOICE_FIELDS = ["xzsl", "xzje", "zje", "qd", "zd", "r1", "xzrq", "sl", "mx"]
+            INVOICE_FIELDS = ["xzsl", "xzje", "zje", "qd", "zd", "r1", "xzrq", "sl", "nlsl", "mx"]
 
             merged_data = {}
             for gs in selected_gs:
                 merged = {}
                 if gs in account_data:
                     merged.update(account_data[gs])
-                if gs in invoice_data:
-                    for key in INVOICE_FIELDS:
-                        if key in invoice_data[gs]:
-                            merged[key] = invoice_data[gs][key]
+                invoices = invoice_data.get(gs, [])
+                first_invoice = invoices[0] if invoices else {}
+                for key in INVOICE_FIELDS:
+                    if key in first_invoice:
+                        merged[key] = first_invoice[key]
                 merged_data[gs] = merged
 
             # 步骤 5: 获取每个户号的实时仪表日用水数据（用水详情 / 昨日用水量传感器使用）
@@ -250,6 +321,12 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("获取户号 %s 仪表数据失败: %s", gs, error)
                     records = []
                 merged_data.setdefault(gs, {})[YIBIAO_DATA_KEY] = records
+
+            # 步骤 6: 订单详情（账单全量记录，筛选并重命名字段）
+            for gs in selected_gs:
+                records = invoice_data.get(gs, [])
+                order_list = [_transform_invoice_record(rec) for rec in records]
+                merged_data.setdefault(gs, {})[ORDER_DETAIL_KEY] = order_list
 
             return merged_data
 

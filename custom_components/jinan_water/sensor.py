@@ -9,9 +9,61 @@ from homeassistant.components.sensor import (SensorEntity,SensorStateClass,Senso
 from homeassistant.const import UnitOfVolume
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_SELECTED_GS, YIBIAO_DATA_KEY
+from .const import DOMAIN, CONF_SELECTED_GS, YIBIAO_DATA_KEY, ORDER_DETAIL_KEY
 
 _LOGGER = logging.getLogger(__name__)
+
+# ============================================================
+# 字段说明（供前端 UI 设计参考）
+# 这些说明会以额外属性的形式附加到「订单详情」实体上，便于在 UI 中理解各字段含义
+# ============================================================
+ORDER_DETAIL_FIELD_NOTES = {
+    "id": "账单记录唯一 ID",
+    "gs": "户号",
+    "meter_number": "水表编号",
+    "username": "户名",
+    "address": "用水地址",
+    "is_tiered_price": "是否阶梯水价（true/false）",
+    "person_base": "人口基数（阶梯水价核算用）",
+    "unit_price": "水价（元/m³）",
+    "read_date": "抄表日期",
+    "write_off_num": "销账编号",
+    "write_off_time": "销账时间",
+    "invoice_amount": "发票金额（元）",
+    "penalty_fee": "违约金（元）",
+    "write_off_usage": "销账水量（m³）",
+    "write_off_amount": "销账金额（元）",
+    "total_amount": "总金额（元）",
+    "invoice_apply_time": "发票领取时间",
+    "invoice_status": "发票状态（如：未开票）",
+    "status": "用水记录状态（如：YH=已核）",
+    "invoice_type": "发票类型（如：增值税普通电子发票）",
+    "pay_type": "缴费方式",
+    "pay_channel": "缴费渠道",
+    "invoice_code": "电子发票代码",
+    "invoice_num": "电子发票号码",
+    "invoice_check_code": "电子发票校验码",
+    "invoice_apply_code": "电子发票申请代码",
+    "invoice_pipeline_num": "发票申请流水号",
+    "balance_last": "上期余额（元）",
+    "balance_current": "本期余额（元）",
+    "read_last": "上次表数（m³）",
+    "read_current": "本次表数（m³）",
+    "used_current": "本期用水量（m³）",
+    "bill_month": "账单月份（如：2026-09）",
+    "nlsl": "待定",
+    "balance": "账户余额（元）",
+    "detail": "费用明细列表（子项字段见「明细字段说明」）",
+}
+
+ORDER_DETAIL_MX_FIELD_NOTES = {
+    "index": "明细序号",
+    "name": "费用项目名称（如：一阶基本水费 / 水资源费 / 污水处理费）",
+    "unit": "计量单位（如：立方米）",
+    "total": "数量（用量）",
+    "unit_price": "单价（元）",
+    "amount": "金额（元）",
+}
 
 
 def _parse_record_date(date_str):
@@ -23,6 +75,21 @@ def _parse_record_date(date_str):
         return datetime.strptime(s, "%Y-%m-%d")
     except ValueError:
         return datetime.min
+
+
+def _is_current_unpaid(xzrq, xzbz):
+    """判断本期是否未缴费。
+
+    判定规则（两个字段同时满足才视为未缴费）：
+    - xzrq（销账时间）为空字符串 / None / '0001-01-01T00:00:00'
+    - xzbz（销账编号）为 None / 空字符串
+    """
+    xzrq_empty = (
+        xzrq is None
+        or (isinstance(xzrq, str) and xzrq.strip() in ("", "0001-01-01T00:00:00"))
+    )
+    xzbz_empty = xzbz is None or (isinstance(xzbz, str) and xzbz.strip() == "")
+    return xzrq_empty and xzbz_empty
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -49,6 +116,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.append(WaterPendingFeeSensor(coordinator, entry, gs))
         entities.append(PenaltyFeeSensor(coordinator, entry, gs))
         entities.append(WaterUsageSensor(coordinator, entry, gs))
+        entities.append(WaterYearlyUsageSensor(coordinator, entry, gs))
         entities.append(WaterCurrentFeeSensor(coordinator, entry, gs))
         entities.append(WaterMeterPrevSensor(coordinator, entry, gs))
         entities.append(WaterMeterCurrSensor(coordinator, entry, gs))
@@ -56,6 +124,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.append(WaterPaymentDateSensor(coordinator, entry, gs))
         entities.append(WaterUsageDetailSensor(coordinator, entry, gs))
         entities.append(WaterYesterdayUsageSensor(coordinator, entry, gs))
+        entities.append(WaterOrderDetailSensor(coordinator, entry, gs))
 
     _LOGGER.info("创建了 %d 个传感器实体", len(entities))
     async_add_entities(entities)
@@ -119,6 +188,7 @@ class JinanWaterBaseSensor(CoordinatorEntity, SensorEntity):
 class WaterBalanceSensor(JinanWaterBaseSensor):
     _sensor_key = "balance"
     _attr_name = "水费余额"
+    _attr_icon = "mdi:wallet-outline"
     _attr_native_unit_of_measurement = "元"
 
     @property
@@ -129,6 +199,7 @@ class WaterBalanceSensor(JinanWaterBaseSensor):
 class WaterPriceSensor(JinanWaterBaseSensor):
     _sensor_key = "price"
     _attr_name = "水价"
+    _attr_icon = "mdi:tag-outline"
     _attr_native_unit_of_measurement = "元/m³"
 
     @property
@@ -139,6 +210,7 @@ class WaterPriceSensor(JinanWaterBaseSensor):
 class WaterAddressSensor(JinanWaterBaseSensor):
     _sensor_key = "address"
     _attr_name = "用水地址"
+    _attr_icon = "mdi:map-marker-outline"
 
     @property
     def native_value(self):
@@ -148,6 +220,7 @@ class WaterAddressSensor(JinanWaterBaseSensor):
 class WaterUserNameSensor(JinanWaterBaseSensor):
     _sensor_key = "username"
     _attr_name = "户名"
+    _attr_icon = "mdi:account-outline"
 
     @property
     def native_value(self):
@@ -157,6 +230,7 @@ class WaterUserNameSensor(JinanWaterBaseSensor):
 class WaterCustomerRepSensor(JinanWaterBaseSensor):
     _sensor_key = "customer_rep"
     _attr_name = "客户代表"
+    _attr_icon = "mdi:account-tie"
 
     @property
     def native_value(self):
@@ -166,6 +240,7 @@ class WaterCustomerRepSensor(JinanWaterBaseSensor):
 class WaterCustomerRepPhoneSensor(JinanWaterBaseSensor):
     _sensor_key = "customer_rep_phone"
     _attr_name = "客户代表电话"
+    _attr_icon = "mdi:phone-outline"
 
     @property
     def native_value(self):
@@ -176,6 +251,7 @@ class WaterCustomerRepPhoneSensor(JinanWaterBaseSensor):
 class WaterPendingFeeSensor(JinanWaterBaseSensor):
     _sensor_key = "pending_fee"
     _attr_name = "欠费金额"
+    _attr_icon = "mdi:alert-circle-outline"
     _attr_native_unit_of_measurement = "元"
     @property
     def native_value(self):
@@ -185,6 +261,7 @@ class WaterPendingFeeSensor(JinanWaterBaseSensor):
 class PenaltyFeeSensor(JinanWaterBaseSensor):
     _sensor_key = "penalty_fee"
     _attr_name = "违约金"
+    _attr_icon = "mdi:gavel"
     _attr_native_unit_of_measurement = "元"
     @property
     def native_value(self):
@@ -198,21 +275,44 @@ class PenaltyFeeSensor(JinanWaterBaseSensor):
 class WaterUsageSensor(JinanWaterBaseSensor):
     _sensor_key = "usage"
     _attr_name = "本期用水量"
+    _attr_icon = "mdi:water"
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
     @property
     def native_value(self):
         data = self.gs_data
-        return data.get("xzsl", data.get("sl"))
+        return data.get("sl")
+
+
+class WaterYearlyUsageSensor(JinanWaterBaseSensor):
+    """年累计用水量传感器。
+
+    TODO: 年累计用水量的接口字段待确认（当前 nlsl 实际并非年累计水量），
+    数据来源暂不确定。待后端确认正确字段后，再从 gs_data 读取真实值；
+    当前先固定返回 0 作为占位。
+    """
+
+    _sensor_key = "yearly_usage"
+    _attr_name = "年累计用水量"
+    _attr_icon = "mdi:chart-areaspline"
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+
+    @property
+    def native_value(self):
+        # TODO: 年累计用水量字段待确认（nlsl 目前并非年累计水量，返回 0 为占位）。
+        # 待接口确认正确字段后，取消注释下方取值逻辑：
+        # return self.gs_data.get("nlsl")
+        return 0
 
 
 class WaterCurrentFeeSensor(JinanWaterBaseSensor):
     _sensor_key = "current_fee"
     _attr_name = "本期水费"
+    _attr_icon = "mdi:receipt-text-outline"
     _attr_native_unit_of_measurement = "元"
     @property
     def native_value(self):
         data = self.gs_data
-        return data.get("xzje", data.get("zje"))
+        return data.get("zje")
 
     @property
     def extra_state_attributes(self):
@@ -249,6 +349,7 @@ class WaterCurrentFeeSensor(JinanWaterBaseSensor):
 class WaterMeterPrevSensor(JinanWaterBaseSensor):
     _sensor_key = "meter_prev"
     _attr_name = "上次表数"
+    _attr_icon = "mdi:gauge-low"
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
 
     @property
@@ -259,7 +360,7 @@ class WaterMeterPrevSensor(JinanWaterBaseSensor):
 class WaterMeterCurrSensor(JinanWaterBaseSensor):
     _sensor_key = "meter_curr"
     _attr_name = "本次表数"
-    _attr_icon = "mdi:speedometer-slow"
+    _attr_icon = "mdi:gauge"
     _attr_device_class = SensorDeviceClass.WATER
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
@@ -272,6 +373,7 @@ class WaterMeterCurrSensor(JinanWaterBaseSensor):
 class WaterMeterDateSensor(JinanWaterBaseSensor):
     _sensor_key = "meter_date"
     _attr_name = "抄表日期"
+    _attr_icon = "mdi:calendar-clock"
 
     @property
     def native_value(self):
@@ -287,16 +389,21 @@ class WaterMeterDateSensor(JinanWaterBaseSensor):
 class WaterPaymentDateSensor(JinanWaterBaseSensor):
     _sensor_key = "payment_date"
     _attr_name = "缴费时间"
+    _attr_icon = "mdi:cash-check"
 
     @property
     def native_value(self):
-        value = self.gs_data.get("xzrq")
-        if not value:
+        xzrq = self.gs_data.get("xzrq")
+        xzbz = self.gs_data.get("xzbz")
+        # 本期未缴费时，缴费时间展示为「未缴费」
+        if _is_current_unpaid(xzrq, xzbz):
+            return "未缴费"
+        if not xzrq:
             return None
         try:
-            return value[:19].replace("T", " ")  # "2026-07-22 17:49:12"
+            return xzrq[:19].replace("T", " ")  # "2026-07-22 17:49:12"
         except (TypeError, ValueError, IndexError):
-            return str(value) if value else None
+            return str(xzrq) if xzrq else None
 
 
 # ============================================================
@@ -340,6 +447,7 @@ class WaterYesterdayUsageSensor(JinanWaterBaseSensor):
 
     _sensor_key = "usage_yesterday"
     _attr_name = "昨日用水量"
+    _attr_icon = "mdi:water-outline"
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
 
     @property
@@ -349,3 +457,28 @@ class WaterYesterdayUsageSensor(JinanWaterBaseSensor):
             return None
         latest = max(records, key=lambda r: _parse_record_date(r.get("date", "")))
         return latest.get("value")
+
+
+class WaterOrderDetailSensor(JinanWaterBaseSensor):
+    """订单详情传感器：固定值「图表」，全部账单记录（已筛选/重命名）存放于 graph 属性（真实列表）。"""
+
+    _sensor_key = "order_detail"
+    _attr_name = "订单详情"
+    _attr_icon = "mdi:file-document-outline"
+
+    @property
+    def native_value(self):
+        return "图表"
+
+    @property
+    def extra_state_attributes(self):
+        records = self.gs_data.get(ORDER_DETAIL_KEY, [])
+        if not records:
+            return {}
+        # 返回真实列表对象，Home Assistant 以结构化列表形式展示
+        # 同时附带字段说明，方便前端 UI 设计理解每个字段含义
+        return {
+            "graph": records,
+            "字段说明": ORDER_DETAIL_FIELD_NOTES,
+            "明细字段说明": ORDER_DETAIL_MX_FIELD_NOTES,
+        }
