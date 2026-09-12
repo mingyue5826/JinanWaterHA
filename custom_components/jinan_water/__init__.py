@@ -3,8 +3,9 @@
 import json
 import logging
 import urllib.parse
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+from dateutil.relativedelta import relativedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -21,6 +22,9 @@ from .const import (
     API_BASE_URL,
     API_ENDPOINT,
     API_ENDPOINT_FAPIAO,
+    API_ENDPOINT_GetYiBiaoInfo,
+    API_ENDPOINT_GetDataList,
+    YIBIAO_DATA_KEY,
     SERVICE_REFRESH_DATA,
 )
 
@@ -98,9 +102,12 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
             "Content-Type": "application/json",
         }
 
-    async def _call_api(self, session, url, headers):
-        """发送 API 请求并返回解析后的 JSON 数据。"""
-        async with session.post(url, headers=headers, data="{}") as response:
+    async def _call_api(self, session, url, headers, body="{}"):
+        """发送 API 请求并返回解析后的 JSON 数据。
+
+        body 为已序列化的 JSON 字符串；不传时默认发送空对象 "{}"（兼容既有接口）。
+        """
+        async with session.post(url, headers=headers, data=body) as response:
             if response.status != 200:
                 raise UpdateFailed(f"API 请求失败，HTTP 状态码: {response.status}")
 
@@ -113,6 +120,71 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                 )
 
             return result
+
+    async def _fetch_yibiao_data(self, session, headers, gs):
+        """获取指定户号的实时仪表日用水数据。
+
+        流程：
+        1. 调用 GetYiBiaoInfo 取得 jsonData（字符串化 JSON 数组，含各数据文件标识）；
+        2. 取出 InfoName 为 YibiaoSLInfo 的项；
+        3. 以其作为 body 调用 GetDataList，返回 data（字符串化 JSON 数组，即日用水记录）。
+        """
+        today = datetime.now()
+        month_ago = today - relativedelta(months=1)
+
+        yibiao_body = {
+            "WhereList": [
+                {
+                    "WhereName": "GS",
+                    "Comparison": 0,
+                    "Value": gs,
+                    "GroupName": "Group1",
+                }
+            ],
+            "Index": 0,
+            "PageRecordCount": 3000,
+            "isPage": False,
+            "OrderBy": [""],
+            "KaiShiRQ": month_ago.strftime("%Y-%m-%d"),
+            "JieShuRQ": today.strftime("%Y-%m-%d"),
+            "SumColunms": ["LiuLiang"],
+            "GroupBy": [""],
+            "PageToken": "",
+        }
+
+        yibiao_url = f"{API_BASE_URL}{API_ENDPOINT_GetYiBiaoInfo}"
+        yibiao_result = await self._call_api(
+            session, yibiao_url, headers, json.dumps(yibiao_body, ensure_ascii=False)
+        )
+
+        json_data = yibiao_result.get("jsonData")
+        if not json_data:
+            return []
+        if isinstance(json_data, str):
+            json_data = json.loads(json_data)
+        if not isinstance(json_data, list):
+            return []
+
+        yibiao_info = next(
+            (x for x in json_data if x.get("InfoName") == "YibiaoSLInfo"), None
+        )
+        if not yibiao_info:
+            return []
+
+        data_list_url = f"{API_BASE_URL}{API_ENDPOINT_GetDataList}"
+        data_result = await self._call_api(
+            session, data_list_url, headers, json.dumps(yibiao_info, ensure_ascii=False)
+        )
+
+        data = data_result.get("data")
+        if not data:
+            return []
+        if isinstance(data, str):
+            data = json.loads(data)
+        if not isinstance(data, list):
+            return []
+
+        return data
 
     async def async_update_data(self):
         """数据更新方法。"""
@@ -169,6 +241,15 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                         if key in invoice_data[gs]:
                             merged[key] = invoice_data[gs][key]
                 merged_data[gs] = merged
+
+            # 步骤 5: 获取每个户号的实时仪表日用水数据（用水详情 / 昨日用水量传感器使用）
+            for gs in selected_gs:
+                try:
+                    records = await self._fetch_yibiao_data(session, headers, gs)
+                except Exception as error:
+                    _LOGGER.warning("获取户号 %s 仪表数据失败: %s", gs, error)
+                    records = []
+                merged_data.setdefault(gs, {})[YIBIAO_DATA_KEY] = records
 
             return merged_data
 

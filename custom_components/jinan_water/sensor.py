@@ -3,14 +3,26 @@
 """
 
 import logging
+from datetime import datetime
 
 from homeassistant.components.sensor import (SensorEntity,SensorStateClass,SensorDeviceClass)
 from homeassistant.const import UnitOfVolume
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_SELECTED_GS
+from .const import DOMAIN, CONF_SELECTED_GS, YIBIAO_DATA_KEY
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _parse_record_date(date_str):
+    """将记录中的 date 字段（如 '2026-09-12 00'）解析为 datetime，失败返回 datetime.min 以便取最大值。"""
+    if not date_str or not isinstance(date_str, str):
+        return datetime.min
+    s = date_str[:-3] if date_str.endswith(" 00") else date_str
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        return datetime.min
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -42,6 +54,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.append(WaterMeterCurrSensor(coordinator, entry, gs))
         entities.append(WaterMeterDateSensor(coordinator, entry, gs))
         entities.append(WaterPaymentDateSensor(coordinator, entry, gs))
+        entities.append(WaterUsageDetailSensor(coordinator, entry, gs))
+        entities.append(WaterYesterdayUsageSensor(coordinator, entry, gs))
 
     _LOGGER.info("创建了 %d 个传感器实体", len(entities))
     async_add_entities(entities)
@@ -283,3 +297,55 @@ class WaterPaymentDateSensor(JinanWaterBaseSensor):
             return value[:19].replace("T", " ")  # "2026-07-22 17:49:12"
         except (TypeError, ValueError, IndexError):
             return str(value) if value else None
+
+
+# ============================================================
+# 实时仪表传感器（数据来源：GetYiBiaoInfo + GetDataList）
+# ============================================================
+
+class WaterUsageDetailSensor(JinanWaterBaseSensor):
+    """用水详情传感器：固定值「图表」，明细列表存放于 graph 属性（真实列表对象）。"""
+
+    _sensor_key = "usage_detail"
+    _attr_name = "用水详情"
+    _attr_icon = "mdi:chart-line"
+
+    @property
+    def native_value(self):
+        return "图表"
+
+    @property
+    def extra_state_attributes(self):
+        records = self.gs_data.get(YIBIAO_DATA_KEY, [])
+        if not records:
+            return {}
+
+        graph_records = []
+        for rec in records:
+            item = dict(rec)
+            date_val = item.get("date")
+            if isinstance(date_val, str) and date_val.endswith(" 00"):
+                item["date"] = date_val[:-3]
+            graph_records.append(item)
+
+        if not graph_records:
+            return {}
+
+        # 返回真实列表对象，Home Assistant 会以结构化列表（开发中工具/前端）形式展示
+        return {"graph": graph_records}
+
+
+class WaterYesterdayUsageSensor(JinanWaterBaseSensor):
+    """昨日用水量传感器：取日用水记录中日期最新一条的 value。"""
+
+    _sensor_key = "usage_yesterday"
+    _attr_name = "昨日用水量"
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+
+    @property
+    def native_value(self):
+        records = self.gs_data.get(YIBIAO_DATA_KEY, [])
+        if not records:
+            return None
+        latest = max(records, key=lambda r: _parse_record_date(r.get("date", "")))
+        return latest.get("value")

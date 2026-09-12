@@ -69,6 +69,17 @@ API_ENDPOINT = "/shoufeizjj3/api/WxProgramApi/GetBangDingList"
 # 请求地址: https://yx.jinanwater.cn/shoufeizjj3/api/WxProgramApi/GetFaPiaoList?GS=户号
 API_ENDPOINT_FAPIAO = "/shoufeizjj3/api/WxProgramApi/GetFaPiaoList"
 
+# GetYiBiaoInfo 接口用于获取实时仪表信息（按户号查询，返回 jsonData 指向的数据文件清单）
+# 完整请求地址: https://yx.jinanwater.cn/shoufeizjj3/api/WxProgramApi/GetYiBiaoInfo?Type=SS
+API_ENDPOINT_GetYiBiaoInfo = "/shoufeizjj3/api/WxProgramApi/GetYiBiaoInfo?Type=SS"
+
+# GetDataList 接口用于获取仪表数据（日用水明细，需先由 GetYiBiaoInfo 的 jsonData 取得文件标识）
+# 完整请求地址: https://yx.jinanwater.cn/shoufeizjj3/api/WxProgramApi/GetDataList
+API_ENDPOINT_GetDataList = "/shoufeizjj3/api/WxProgramApi/GetDataList"
+
+# 合并数据中使用的数据键：实时仪表日用水记录列表
+YIBIAO_DATA_KEY = "yibiao_data"
+
 # ============================================================
 # 服务名称常量
 # 用于注册自定义服务，用户可在 HA "开发者工具 > 服务" 中调用
