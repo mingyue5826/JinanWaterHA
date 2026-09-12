@@ -328,6 +328,14 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
                     "Content-Type": "application/json",
                 }
 
+                # yue            balance             余额
+                # dj             price               水价、单价
+                # mp             address             用水地址 门牌
+                # hm             username            户名
+                # qfje           pending_fee         欠费金额
+                # wyj            penalty_fee         违约金
+                # keHuDaiBiao    customer_rep        客户代表
+                # keHuDaiBiaoDH  customer_rep_phone  客户代表电话
                 async with session.post(url, headers=headers, data="{}") as response:
                     if response.status != 200:
                         raise Exception(f"API 请求失败，状态码: {response.status}")

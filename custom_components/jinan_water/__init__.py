@@ -144,11 +144,19 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                     invoice_url = f"{API_BASE_URL}{API_ENDPOINT_FAPIAO}?GS={gs}"
                     invoice_list = await self._call_api(session, invoice_url, headers)
                     if invoice_list:
+                        # todo 发票接口返回的是多次结果，其中的r1代表本次统计的抄表日期
                         invoice_data[gs] = invoice_list[0]
                 except Exception as error:
                     _LOGGER.warning("获取户号 %s 账单失败: %s", gs, error)
 
             # 步骤 4: 合并数据
+            # xzsl(sl)     usage        本期用水量
+            # xzje(zje)    current_fee  本期水费
+            # mx                        明细
+            # qd           meter_prev   上次表数
+            # zd           meter_curr   本次表数
+            # r1           meter_date   抄表日期
+            # xzrq         payment_date 缴费时间
             INVOICE_FIELDS = ["xzsl", "xzje", "zje", "qd", "zd", "r1", "xzrq", "sl", "mx"]
 
             merged_data = {}
