@@ -105,16 +105,14 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed(f"API 请求失败，HTTP 状态码: {response.status}")
 
             result = await response.json()
-            data = result.get("data")
-            if data is None:
-                state = result.get("state") or result.get("State")
-                if not state:
-                    raise UpdateFailed(
-                        f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}"
-                    )
-                return []
 
-            return data
+            state = result.get("state") or result.get("State")
+            if not state:
+                raise UpdateFailed(
+                    f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}"
+                )
+
+            return result
 
     async def async_update_data(self):
         """数据更新方法。"""
@@ -129,6 +127,7 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
             # 步骤 1: 获取账户级数据
             account_url = f"{API_BASE_URL}{API_ENDPOINT}?PhoneNum={phone_num}"
             account_list = await self._call_api(session, account_url, headers)
+            account_list = account_list.get("data")
 
             # 步骤 2: 过滤出用户选择的户号
             account_data = {}
@@ -143,6 +142,7 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                 try:
                     invoice_url = f"{API_BASE_URL}{API_ENDPOINT_FAPIAO}?GS={gs}"
                     invoice_list = await self._call_api(session, invoice_url, headers)
+                    invoice_list = invoice_list.get("data")
                     if invoice_list:
                         # todo 发票接口返回的是多次结果，其中的r1代表本次统计的抄表日期
                         invoice_data[gs] = invoice_list[0]
