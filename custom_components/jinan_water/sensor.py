@@ -7,9 +7,11 @@ from datetime import datetime
 
 from homeassistant.components.sensor import (SensorEntity,SensorStateClass,SensorDeviceClass)
 from homeassistant.const import UnitOfVolume
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, CONF_SELECTED_GS, YIBIAO_DATA_KEY, ORDER_DETAIL_KEY
+from .helpers import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -128,6 +130,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.append(YesterdayMeterSensor(coordinator, entry, gs))  # 昨日表读数
         entities.append(YesterdayReadingDate(coordinator, entry, gs))
         entities.append(OrderDetailSensor(coordinator, entry, gs))
+        entities.append(RefreshTimeSensor(coordinator, entry, gs))  # 上次同步时间
 
     _LOGGER.info("创建了 %d 个传感器实体", len(entities))
     async_add_entities(entities)
@@ -145,18 +148,9 @@ class JinanWaterBaseSensor(CoordinatorEntity, SensorEntity):
         object.__setattr__(self, 'entity_id', f"sensor.{DOMAIN}_{self._sensor_key}_{gs}")
         object.__setattr__(self, '_attr_unique_id', f"{DOMAIN}_{self._sensor_key}_{gs}")
 
-        # 设置设备信息
+        # 设置设备信息（与 button.py 共用同一份构造逻辑）
         data = coordinator.data or {}
-        gs_data = data.get(gs, {})
-        mp = gs_data.get("mp", "") # 门牌
-        hm = gs_data.get("hm", "") # 户名
-
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id, gs)},
-            "name": mp if mp else f"济南水务 - {gs}",
-            "manufacturer": "济南水务集团",
-            "model": f"户号: {hm} - {gs}",
-        }
+        self._attr_device_info = build_device_info(entry, gs, data)
 
         # 调用父类初始化
         super().__init__(coordinator)
@@ -415,7 +409,11 @@ class PaymentDateSensor(JinanWaterBaseSensor):
 # ============================================================
 
 class UsageDetailSensor(JinanWaterBaseSensor):
-    """用水详情传感器：固定值「图表」，明细列表存放于 graph 属性（真实列表对象）。"""
+    """用水详情传感器：固定值「图表」，明细列表存放于 graph 属性（真实列表对象）。
+
+    graph 为「接口数据 ∪ 本地持久化历史」合并后的日用水记录（见 history.py），
+    因此即使接口只返回近 1 个月，这里也能拿到累积的完整曲线。
+    """
 
     _sensor_key = "usage_detail"
     _attr_name = "用水详情"
@@ -519,3 +517,20 @@ class OrderDetailSensor(JinanWaterBaseSensor):
             "字段说明": ORDER_DETAIL_FIELD_NOTES,
             "明细字段说明": ORDER_DETAIL_MX_FIELD_NOTES,
         }
+
+
+class RefreshTimeSensor(JinanWaterBaseSensor):
+    """上次同步时间传感器：展示协调器最近一次成功同步的时间（自动同步或手动刷新均会更新）。"""
+
+    _sensor_key = "refresh_time"
+    _attr_name = "上次同步时间"
+    _attr_icon = "mdi:clock-check"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        # 读取协调器自行记录的同步时间（UTC，带时区）。
+        # 不使用 coordinator.last_update_success_time：最新 HA 该属性已从 DataUpdateCoordinator
+        # 基类移至 TimestampDataUpdateCoordinator 子类，直接访问会 AttributeError 导致实体不可用。
+        return getattr(self.coordinator, "last_sync_time", None)
