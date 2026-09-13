@@ -44,15 +44,17 @@ class JinanWaterRefreshButton(CoordinatorEntity, ButtonEntity):
         object.__setattr__(self, '_attr_unique_id', f"{DOMAIN}_refresh_{gs}")
         object.__setattr__(self, '_attr_name', f"刷新数据_{gs}")
 
-        # 设备信息
+        # 设置设备信息
         data = coordinator.data or {}
-        mp = data.get(gs, {}).get("mp", "")
+        gs_data = data.get(gs, {})
+        mp = gs_data.get("mp", "")  # 门牌
+        hm = gs_data.get("hm", "")  # 户名
 
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id, gs)},
             "name": mp if mp else f"济南水务 - {gs}",
             "manufacturer": "济南水务集团",
-            "model": f"户号: {gs}",
+            "model": f"户号: {hm} - {gs}",
         }
 
         # 调用父类初始化

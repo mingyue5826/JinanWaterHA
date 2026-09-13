@@ -411,7 +411,7 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
             gs = item["gs"]
             hm = item.get("hm", "未知户名")
             mp = item.get("mp", "未知地址")
-            gs_options[gs] = f"{hm} - {mp}"
+            gs_options[gs] = f"{hm} - {gs} - {mp}"
 
         # 获取当前已选的户号，作为复选框的默认勾选状态
         current_selected = self.config_entry.data.get(CONF_SELECTED_GS, [])
