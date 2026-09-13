@@ -284,7 +284,10 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
 
         :param config_entry: 当前的配置条目，包含已有的配置数据
         """
-        self.config_entry = config_entry
+        # 注意：现代 HA 的 OptionsFlow 已通过 self.config_entry 属性提供配置条目，
+        # 手动赋值 self.config_entry 在新版会触发 read-only property 报错（AttributeError）。
+        # 因此这里保存到私有属性 self._entry，避免与 HA 的属性冲突导致“配置”按钮 500。
+        self._entry = config_entry
         self._bangding_list = []
         # 临时存储第一步收集的数据，传给第二步使用
         self._temp_data = {}
@@ -359,7 +362,7 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
                     return await self.async_step_select_gs()
 
         # 读取当前配置数据，作为表单的默认值（预填功能）
-        current_data = self.config_entry.data
+        current_data = self._entry.data
         schema = vol.Schema(
             {
                 vol.Required(CONF_OPENID, default=current_data.get(CONF_OPENID, "")): str,
@@ -395,12 +398,14 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
                 # 更新配置条目的数据
                 # 将第一步的临时数据和第二步选择的户号合并后写入
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry,
+                    self._entry,
                     data={
                         **self._temp_data,
                         CONF_SELECTED_GS: selected_gs,
                     },
                 )
+                # 重新加载集成，使新的账号信息（OpenID/手机号等）立即生效，无需手动重启
+                await self.hass.config_entries.async_reload(self._entry.entry_id)
                 # 选项流完成时调用 async_create_entry
                 # 注意：OptionsFlow 中 title 和 data 通常留空
                 return self.async_create_entry(title="", data={})
@@ -414,7 +419,7 @@ class JinanWaterOptionsFlow(config_entries.OptionsFlow):
             gs_options[gs] = f"{hm} - {gs} - {mp}"
 
         # 获取当前已选的户号，作为复选框的默认勾选状态
-        current_selected = self.config_entry.data.get(CONF_SELECTED_GS, [])
+        current_selected = self._entry.data.get(CONF_SELECTED_GS, [])
 
         data_schema = vol.Schema(
             {

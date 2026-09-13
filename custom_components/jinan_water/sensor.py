@@ -119,8 +119,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.append(YearlyUsageSensor(coordinator, entry, gs))
         entities.append(CurrentFeeSensor(coordinator, entry, gs))
         # 本期/上期订单相关传感器：实体ID前缀统一为 order_，便于在 HA 实体列表中排序相邻
-        entities.append(PriceSensor(coordinator, entry, gs))        # 本期水价
-        entities.append(MeterReadingStartSensor(coordinator, entry, gs))    # 上期订单表数
+        entities.append(MeterReadingStartSensor(coordinator, entry, gs))    # 本期初始表数
         entities.append(MeterReadingEndSensor(coordinator, entry, gs))    # 本期表数
         entities.append(MeterDateSensor(coordinator, entry, gs))    # 本期抄表时间
         entities.append(PaymentDateSensor(coordinator, entry, gs))  # 本期缴费时间
