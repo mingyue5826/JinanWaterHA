@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>济南水务卡片 - 本地预览</title>
+<style>
+  body {
+    margin: 0; padding: 20px;
+    background: #f2f4f7;
+    font-family: "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+    color: #1c1c1e;
+  }
+  .layout { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  .col { width: 400px; }
+  .col > h3 { font-size: 13px; font-weight: 600; color: #6b7280; margin: 0 0 6px 2px; }
+  /* 模拟 HA 的深色/浅色变量（浅色主题） */
+  :root {
+    --primary-text-color: #1c1c1e;
+    --secondary-text-color: #6b7280;
+    --card-background-color: #ffffff;
+    --ha-card-background: #ffffff;
+    --secondary-background-color: rgba(0, 0, 0, 0.045);
+    --ha-card-border-radius: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="col" data-view="default">
+    <h3>默认视图</h3>
+    <jinan-water-card id="c1"></jinan-water-card>
+  </div>
+  <div class="col" data-view="calendar">
+    <h3>水费日历</h3>
+    <jinan-water-card id="c2"></jinan-water-card>
+  </div>
+  <div class="col" data-view="dayChart">
+    <h3>日用水曲线</h3>
+    <jinan-water-card id="c3"></jinan-water-card>
+  </div>
+  <div class="col" data-view="orders">
+    <h3>订单列表（第一笔已展开）</h3>
+    <jinan-water-card id="c4"></jinan-water-card>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+ * mock hass.states：数据取自 接口.md 中的真实接口返回样例
+ * ========================================================================== */
+const GS = "6422376";
+
+/** 生成日用水记录：真实样例日期用样例值，其余按规律补齐（模拟集成持久化后的历史） */
+function buildDailyGraph() {
+  const sample = {
+    "2026-09-02": 0.03, "2026-09-03": 0.43, "2026-09-04": 0.28, "2026-09-05": 0.29,
+    "2026-09-06": 0.54, "2026-09-07": 0.63, "2026-09-08": 0.42, "2026-09-09": 0.51,
+    "2026-09-10": 0.38, "2026-09-11": 0.46, "2026-09-12": 0.35,
+  };
+  const rows = [];
+  const start = new Date("2026-08-13T00:00:00");
+  const end = new Date("2026-09-12T00:00:00");
+  let reading = 9.6;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const seed = (d.getDate() * 37 + d.getMonth() * 11) % 100;
+    const value = sample[iso] !== undefined ? sample[iso] : Number((0.22 + (seed / 100) * 0.55).toFixed(2));
+    reading = Number((reading + value).toFixed(2));
+    rows.push({
+      date: iso,
+      ID: 938411690 + rows.length,
+      ChaoBiaoHM: GS,
+      value,
+      ZhiDu: reading,
+      LiuLiangSS: 0,
+      Yali: 0,
+      BiaoPanTP: "",
+      YibiaoZTMC: "",
+      l: 0.3105,
+      u: 0.3599,
+      value1: 0,
+      value2: 0,
+      value3: Number((0.28 + (seed / 100) * 0.18).toFixed(2)),
+    });
+  }
+  return rows;
+}
+
+/** 账单记录（字段名与集成重命名后一致） */
+const ORDERS = [
+  {
+    id: 75819511, gs: GS, meter_number: "09-C58-415", username: "张三",
+    address: "某某小区3号楼1-201", is_tiered_price: true, person_base: 4, unit_price: 4.2,
+    read_date: "2026-09-09T00:00:00", write_off_num: "", write_off_time: "0001-01-01T00:00:00",
+    invoice_amount: 205.8, penalty_fee: 0, write_off_usage: 49, write_off_amount: 205.8,
+    total_amount: 205.8, invoice_apply_time: "0001-01-01T00:00:00", invoice_status: "未开票",
+    status: "YH", invoice_type: "增值税普通电子发票", pay_type: null, pay_channel: null,
+    balance_last: 0, balance_current: 0, read_last: 125, read_current: 13, used_current: 49,
+    bill_month: "2026-09", nlsl: 0, balance: 0,
+    detail: [
+      { index: 1, name: "一阶基本水费", unit: "立方米", total: 49, unit_price: 2.8, amount: 137.2 },
+      { index: 2, name: "水资源费", unit: "立方米", total: 49, unit_price: 0.4, amount: 19.6 },
+      { index: 3, name: "污水处理费", unit: "立方米", total: 49, unit_price: 1.0, amount: 49.0 },
+    ],
+  },
+  {
+    id: 73138544, gs: GS, meter_number: "01-C72-415", username: "张三",
+    address: "某某小区3号楼1-201", is_tiered_price: true, person_base: 0, unit_price: 4.2,
+    read_date: "2026-07-01T00:00:00", write_off_num: "069065601423885",
+    write_off_time: "2026-07-22T17:49:12.5", invoice_amount: 134.4, penalty_fee: 0,
+    write_off_usage: 32, write_off_amount: 134.4, total_amount: 134.4,
+    invoice_apply_time: "2026-07-31T09:40:36", invoice_status: "已开票", status: "YH",
+    invoice_type: "增值税普通电子发票", pay_type: "现金", pay_channel: "66-支付宝",
+    balance_last: 0, balance_current: 0, read_last: 93, read_current: 125, used_current: 32,
+    bill_month: "2026-07", nlsl: 0, balance: 0,
+    detail: [
+      { index: 1, name: "一阶基本水费", unit: "立方米", total: 32, unit_price: 2.8, amount: 89.6 },
+      { index: 2, name: "水资源费", unit: "立方米", total: 32, unit_price: 0.4, amount: 12.8 },
+      { index: 3, name: "污水处理费", unit: "立方米", total: 32, unit_price: 1.0, amount: 32.0 },
+    ],
+  },
+  {
+    id: 71000001, gs: GS, meter_number: "01-C72-415", username: "张三",
+    address: "某某小区3号楼1-201", is_tiered_price: true, person_base: 4, unit_price: 4.2,
+    read_date: "2026-06-02T00:00:00", write_off_num: "069065601400001",
+    write_off_time: "2026-06-19T10:12:00", invoice_amount: 151.2, penalty_fee: 0,
+    write_off_usage: 36, write_off_amount: 151.2, total_amount: 151.2,
+    invoice_apply_time: "2026-06-25T09:00:00", invoice_status: "已开票", status: "YH",
+    invoice_type: "增值税普通电子发票", pay_type: "微信", pay_channel: "10-微信支付",
+    balance_last: 0, balance_current: 0, read_last: 57, read_current: 93, used_current: 36,
+    bill_month: "2026-06", nlsl: 0, balance: 0,
+    detail: [
+      { index: 1, name: "一阶基本水费", unit: "立方米", total: 36, unit_price: 2.8, amount: 100.8 },
+      { index: 2, name: "水资源费", unit: "立方米", total: 36, unit_price: 0.4, amount: 14.4 },
+      { index: 3, name: "污水处理费", unit: "立方米", total: 36, unit_price: 1.0, amount: 36.0 },
+    ],
+  },
+];
+
+const now = new Date();
+const states = {};
+const put = (key, state, attributes = {}) => {
+  const id = `sensor.jinan_water_${key}_${GS}`;
+  states[id] = {
+    entity_id: id,
+    state: String(state),
+    attributes: { friendly_name: key, ...attributes },
+    last_updated: now.toISOString(),
+    last_changed: now.toISOString(),
+  };
+};
+
+put("balance", "0", { unit_of_measurement: "元" });
+put("pending_fee", "205.80", { unit_of_measurement: "元" });
+put("penalty_fee", "0", { unit_of_measurement: "元" });
+put("order_price", "4.20", { unit_of_measurement: "元/m³" });
+put("usage", "49", { unit_of_measurement: "m³" });
+put("usage_yesterday", "0.35", { unit_of_measurement: "m³" });
+put("meter_yesterday", "13.02", { unit_of_measurement: "m³" });
+put("current_fee", "205.80", { unit_of_measurement: "元" });
+put("yearly_usage", "0", { unit_of_measurement: "m³" });
+put("usage_detail", "图表", { graph: buildDailyGraph() });
+put("order_detail", "图表", { graph: ORDERS });
+put("refresh_time", now.toISOString(), { device_class: "timestamp" });
+put("yesterday_meter_reading_date", "2026-09-12");
+put("order_meter_date", "2026-09-09");
+put("order_payment_date", "未缴费");
+
+const hass = { states, callService: () => {}, callWS: async () => ({}) };
+
+/* 四个视图各渲染一个实例 */
+const config = { gs: GS, title: "济南水务" };
+const panels = ["", "calendar", "dayChart", "orders"];
+
+customElements.whenDefined("jinan-water-card").then(() => {
+  ["c1", "c2", "c3", "c4"].forEach((id, index) => {
+    const card = document.getElementById(id);
+    card.setConfig({ ...config, default_panel: panels[index] });
+    card.hass = hass;
+    if (index === 3) {
+      // 订单列表：默认展开第一笔，便于验证明细表格
+      setTimeout(() => {
+        const row = card.shadowRoot.querySelector(".order-row");
+        if (row) row.click();
+      }, 30);
+    }
+  });
+
+  // 单视图放大模式：?only=default|calendar|dayChart|orders（用于截图细看）
+  const params = new URLSearchParams(location.search);
+  const only = params.get("only");
+  if (only) {
+    const key = only === "0" ? "default" : only === "2" ? "dayChart" : only;
+    document.querySelectorAll(".col").forEach((col) => {
+      if (col.dataset.view !== (key === "1" ? "calendar" : key === "3" ? "orders" : key)) col.remove();
+    });
+    const col = document.querySelector(".col");
+    if (col) col.style.width = "430px";
+  }
+
+  // 全量阴影 DOM 文本导出：?shadow=1（用于脚本化文本校验，不依赖截图）
+  if (params.get("shadow")) {
+    setTimeout(() => {
+      const card = document.querySelector("jinan-water-card");
+      const pre = document.createElement("pre");
+      pre.style.cssText = "white-space:pre-wrap;font-size:12px;background:#111;color:#0f0;padding:8px;";
+      pre.textContent = card.shadowRoot.innerHTML;
+      document.body.appendChild(pre);
+    }, 250);
+  }
+
+  // hover 探针：?hover=1（脚本派发 mousemove，验证 tooltip 是否真的弹出）
+  if (params.get("hover")) {
+    setTimeout(() => {
+      const card = document.querySelector("jinan-water-card");
+      const root = card.shadowRoot;
+      const lines = [];
+      const fire = (target, ratio) => {
+        if (!target) return null;
+        const rect = target.getBoundingClientRect();
+        const x = rect.left + rect.width * ratio;
+        const y = rect.top + rect.height * 0.5;
+        target.dispatchEvent(new MouseEvent("mousemove", {
+          bubbles: true, composed: true, clientX: x, clientY: y,
+        }));
+        const container = target.closest(".chart-wrap, .usage-spark");
+        const tip = container && container.querySelector(".chart-tooltip");
+        return tip ? { hidden: tip.hidden, text: tip.textContent.trim(), left: tip.style.left } : null;
+      };
+      const spark = root.querySelector('.usage-spark [data-chart="spark"]');
+      const day = root.querySelector('.chart-wrap [data-chart="day"]');
+      lines.push("spark 存在: " + !!spark + " / day 存在: " + !!day);
+      const r1 = fire(spark, 0.6);
+      lines.push("--- 本期用水 sparkline hover(60%) ---");
+      lines.push(r1 ? `hidden=${r1.hidden} left=${r1.left}\n${r1.text}` : "(未取到 tooltip)");
+      const r2 = fire(day, 0.6);
+      lines.push("--- 日用水曲线 hover(60%) ---");
+      lines.push(r2 ? `hidden=${r2.hidden} left=${r2.left}\n${r2.text}` : "(未取到 tooltip 或该视图无此图)");
+      const cursor = root.querySelector(".chart-cursor");
+      lines.push("cursor opacity: " + (cursor ? cursor.style.opacity : "n/a"));
+      // 再派发 mouseleave 到宿主，验证 tooltip 收起
+      card.dispatchEvent(new MouseEvent("mouseleave", { bubbles: false, composed: true }));
+      const after = root.querySelector(".usage-spark .chart-tooltip");
+      lines.push("mouseleave 后 hidden: " + (after ? after.hidden : "n/a"));
+      const pre = document.createElement("pre");
+      pre.style.cssText = "background:#111;color:#0f0;font-size:14px;padding:10px;white-space:pre-wrap;";
+      pre.textContent = lines.join("\n");
+      document.body.appendChild(pre);
+    }, 300);
+  }
+
+  // 诊断模式：?diag=1（把关键元素的实际尺寸打印到页面上，便于脚本化验证）
+  if (params.get("diag")) {
+    setTimeout(() => {
+      const card = document.querySelector("jinan-water-card");
+      const root = card.shadowRoot;
+      const probe = (selector) => {
+        const el = root.querySelector(selector);
+        if (!el) return `${selector}: 缺失`;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return `${selector}: ${rect.width.toFixed(0)}x${rect.height.toFixed(0)} display=${style.display} bg=${style.backgroundColor} h=${style.height}`;
+      };
+      const lines = [
+        probe("ha-card.main-card"),
+        probe(".section-sub"),
+        probe(".ladder-block"),
+        probe(".ladder-band"),
+        probe(".ladder-tier"),
+        probe(".ladder-tier .ladder-tier-fill"),
+        probe(".ladder-bolt"),
+        probe(".ladder-ranges"),
+        probe(".ladder-value"),
+        probe(".ladder-money"),
+        probe(".mini-row"),
+        probe(".usage-spark svg"),
+        probe(".spark-legend"),
+        probe(".delta"),
+        probe(".delta-tip"),
+        "shadow children: " + [...root.children].map((n) => n.tagName.toLowerCase()).join(","),
+        "light children: " + [...document.body.children].map((n) => n.tagName.toLowerCase() + (n.id ? "#" + n.id : "")).join(","),
+        "--- 有背景色的元素 ---",
+      ];
+      root.querySelectorAll("*").forEach((el) => {
+        const style = getComputedStyle(el);
+        const bg = style.backgroundColor;
+        if (bg && bg !== "rgba(0, 0, 0, 0)" && !bg.includes("0, 0, 0, 0")) {
+          const rect = el.getBoundingClientRect();
+          lines.push(
+            `${el.tagName.toLowerCase()}.${el.className || "-"} @(${rect.left.toFixed(0)},${rect.top.toFixed(0)}) ${rect.width.toFixed(0)}x${rect.height.toFixed(0)} bg=${bg}`,
+          );
+        }
+      });
+      const pre = document.createElement("pre");
+      pre.style.cssText = "background:#111;color:#0f0;font-size:14px;padding:10px;white-space:pre-wrap;";
+      pre.textContent = lines.join("\n");
+      document.body.appendChild(pre);
+    }, 200);
+  }
+});
+</script>
+<script src="../jinan-water-card.js"></script>
+</body>
+</html>
