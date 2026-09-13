@@ -42,7 +42,7 @@ class JinanWaterRefreshButton(CoordinatorEntity, ButtonEntity):
         # 在 super().__init__() 之前设置 entity_id 和 unique_id
         object.__setattr__(self, 'entity_id', f"button.{DOMAIN}_refresh_{gs}")
         object.__setattr__(self, '_attr_unique_id', f"{DOMAIN}_refresh_{gs}")
-        object.__setattr__(self, '_attr_name', f"刷新数据_{gs}")
+        object.__setattr__(self, '_attr_name', f"刷新数据")
 
         # 设置设备信息
         data = coordinator.data or {}

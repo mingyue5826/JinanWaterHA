@@ -162,9 +162,10 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
         unionid = data[CONF_UNIONID]
         user_name = data[CONF_USER_NAME]
 
+
         user_info = {"UserName": user_name, "ApplicationId": APPLICATION_ID}
         cookie_value = f"UserInfo={urllib.parse.quote(json.dumps(user_info))}"
-
+        # 经测试这样传参也是可以的，cookie_value="UserInfo={}"
         return {
             "openid": openid,
             "unionid": unionid,
