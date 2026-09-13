@@ -107,24 +107,28 @@ async def async_setup_entry(hass, entry, async_add_entities):
     entities = []
     for gs in selected_gs:
         _LOGGER.info("为户号 %s 创建传感器实体", gs)
-        entities.append(WaterBalanceSensor(coordinator, entry, gs))
-        entities.append(WaterPriceSensor(coordinator, entry, gs))
-        entities.append(WaterAddressSensor(coordinator, entry, gs))
-        entities.append(WaterUserNameSensor(coordinator, entry, gs))
-        entities.append(WaterCustomerRepSensor(coordinator, entry, gs))
-        entities.append(WaterCustomerRepPhoneSensor(coordinator, entry, gs))
-        entities.append(WaterPendingFeeSensor(coordinator, entry, gs))
+        entities.append(BalanceSensor(coordinator, entry, gs))
+        entities.append(PriceSensor(coordinator, entry, gs))
+        entities.append(AddressSensor(coordinator, entry, gs))
+        entities.append(UserNameSensor(coordinator, entry, gs))
+        entities.append(CustomerRepSensor(coordinator, entry, gs))
+        entities.append(CustomerRepPhoneSensor(coordinator, entry, gs))
+        entities.append(PendingFeeSensor(coordinator, entry, gs))
         entities.append(PenaltyFeeSensor(coordinator, entry, gs))
-        entities.append(WaterUsageSensor(coordinator, entry, gs))
-        entities.append(WaterYearlyUsageSensor(coordinator, entry, gs))
-        entities.append(WaterCurrentFeeSensor(coordinator, entry, gs))
-        entities.append(WaterMeterPrevSensor(coordinator, entry, gs))
-        entities.append(WaterMeterCurrSensor(coordinator, entry, gs))
-        entities.append(WaterMeterDateSensor(coordinator, entry, gs))
-        entities.append(WaterPaymentDateSensor(coordinator, entry, gs))
-        entities.append(WaterUsageDetailSensor(coordinator, entry, gs))
-        entities.append(WaterYesterdayUsageSensor(coordinator, entry, gs))
-        entities.append(WaterOrderDetailSensor(coordinator, entry, gs))
+        entities.append(UsageSensor(coordinator, entry, gs))
+        entities.append(YearlyUsageSensor(coordinator, entry, gs))
+        entities.append(CurrentFeeSensor(coordinator, entry, gs))
+        # 本期/上期订单相关传感器：实体ID前缀统一为 order_，便于在 HA 实体列表中排序相邻
+        entities.append(PriceSensor(coordinator, entry, gs))        # 本期水价
+        entities.append(MeterReadingStartSensor(coordinator, entry, gs))    # 上期订单表数
+        entities.append(MeterReadingEndSensor(coordinator, entry, gs))    # 本期表数
+        entities.append(MeterDateSensor(coordinator, entry, gs))    # 本期抄表时间
+        entities.append(PaymentDateSensor(coordinator, entry, gs))  # 本期缴费时间
+        entities.append(UsageDetailSensor(coordinator, entry, gs))
+        entities.append(YesterdayUsageSensor(coordinator, entry, gs))
+        entities.append(YesterdayMeterSensor(coordinator, entry, gs))  # 昨日表读数
+        entities.append(YesterdayReadingDate(coordinator, entry, gs))
+        entities.append(OrderDetailSensor(coordinator, entry, gs))
 
     _LOGGER.info("创建了 %d 个传感器实体", len(entities))
     async_add_entities(entities)
@@ -185,7 +189,7 @@ class JinanWaterBaseSensor(CoordinatorEntity, SensorEntity):
 # 账户级传感器
 # ============================================================
 
-class WaterBalanceSensor(JinanWaterBaseSensor):
+class BalanceSensor(JinanWaterBaseSensor):
     _sensor_key = "balance"
     _attr_name = "水费余额"
     _attr_icon = "mdi:wallet-outline"
@@ -196,9 +200,9 @@ class WaterBalanceSensor(JinanWaterBaseSensor):
         return self.gs_data.get("yue")
 
 
-class WaterPriceSensor(JinanWaterBaseSensor):
-    _sensor_key = "price"
-    _attr_name = "水价"
+class PriceSensor(JinanWaterBaseSensor):
+    _sensor_key = "order_price"
+    _attr_name = "本期水价"
     _attr_icon = "mdi:tag-outline"
     _attr_native_unit_of_measurement = "元/m³"
 
@@ -207,7 +211,7 @@ class WaterPriceSensor(JinanWaterBaseSensor):
         return self.gs_data.get("dj")
 
 
-class WaterAddressSensor(JinanWaterBaseSensor):
+class AddressSensor(JinanWaterBaseSensor):
     _sensor_key = "address"
     _attr_name = "用水地址"
     _attr_icon = "mdi:map-marker-outline"
@@ -217,7 +221,7 @@ class WaterAddressSensor(JinanWaterBaseSensor):
         return self.gs_data.get("mp")
 
 
-class WaterUserNameSensor(JinanWaterBaseSensor):
+class UserNameSensor(JinanWaterBaseSensor):
     _sensor_key = "username"
     _attr_name = "户名"
     _attr_icon = "mdi:account-outline"
@@ -227,7 +231,7 @@ class WaterUserNameSensor(JinanWaterBaseSensor):
         return self.gs_data.get("hm")
 
 
-class WaterCustomerRepSensor(JinanWaterBaseSensor):
+class CustomerRepSensor(JinanWaterBaseSensor):
     _sensor_key = "customer_rep"
     _attr_name = "客户代表"
     _attr_icon = "mdi:account-tie"
@@ -237,7 +241,7 @@ class WaterCustomerRepSensor(JinanWaterBaseSensor):
         return self.gs_data.get("keHuDaiBiao")
 
 
-class WaterCustomerRepPhoneSensor(JinanWaterBaseSensor):
+class CustomerRepPhoneSensor(JinanWaterBaseSensor):
     _sensor_key = "customer_rep_phone"
     _attr_name = "客户代表电话"
     _attr_icon = "mdi:phone-outline"
@@ -248,7 +252,7 @@ class WaterCustomerRepPhoneSensor(JinanWaterBaseSensor):
         return self.gs_data.get("keHuDaiBiaoDH")
 
 
-class WaterPendingFeeSensor(JinanWaterBaseSensor):
+class PendingFeeSensor(JinanWaterBaseSensor):
     _sensor_key = "pending_fee"
     _attr_name = "欠费金额"
     _attr_icon = "mdi:alert-circle-outline"
@@ -272,7 +276,7 @@ class PenaltyFeeSensor(JinanWaterBaseSensor):
 # 账单级传感器
 # ============================================================
 
-class WaterUsageSensor(JinanWaterBaseSensor):
+class UsageSensor(JinanWaterBaseSensor):
     _sensor_key = "usage"
     _attr_name = "本期用水量"
     _attr_icon = "mdi:water"
@@ -283,7 +287,7 @@ class WaterUsageSensor(JinanWaterBaseSensor):
         return data.get("sl")
 
 
-class WaterYearlyUsageSensor(JinanWaterBaseSensor):
+class YearlyUsageSensor(JinanWaterBaseSensor):
     """年累计用水量传感器。
 
     TODO: 年累计用水量的接口字段待确认（当前 nlsl 实际并非年累计水量），
@@ -304,7 +308,7 @@ class WaterYearlyUsageSensor(JinanWaterBaseSensor):
         return 0
 
 
-class WaterCurrentFeeSensor(JinanWaterBaseSensor):
+class CurrentFeeSensor(JinanWaterBaseSensor):
     _sensor_key = "current_fee"
     _attr_name = "本期水费"
     _attr_icon = "mdi:receipt-text-outline"
@@ -346,9 +350,9 @@ class WaterCurrentFeeSensor(JinanWaterBaseSensor):
         return attrs
 
 
-class WaterMeterPrevSensor(JinanWaterBaseSensor):
-    _sensor_key = "meter_prev"
-    _attr_name = "上次表数"
+class MeterReadingStartSensor(JinanWaterBaseSensor):
+    _sensor_key = "order_meter_reading_start"
+    _attr_name = "本期初始表数"
     _attr_icon = "mdi:gauge-low"
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
 
@@ -357,9 +361,9 @@ class WaterMeterPrevSensor(JinanWaterBaseSensor):
         return self.gs_data.get("qd")
 
 
-class WaterMeterCurrSensor(JinanWaterBaseSensor):
-    _sensor_key = "meter_curr"
-    _attr_name = "本次表数"
+class MeterReadingEndSensor(JinanWaterBaseSensor):
+    _sensor_key = "order_meter_reading_end"
+    _attr_name = "本期截止表数"
     _attr_icon = "mdi:gauge"
     _attr_device_class = SensorDeviceClass.WATER
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -370,9 +374,9 @@ class WaterMeterCurrSensor(JinanWaterBaseSensor):
         return self.gs_data.get("zd")
 
 
-class WaterMeterDateSensor(JinanWaterBaseSensor):
-    _sensor_key = "meter_date"
-    _attr_name = "抄表日期"
+class MeterDateSensor(JinanWaterBaseSensor):
+    _sensor_key = "order_meter_date"
+    _attr_name = "本期抄表日期"
     _attr_icon = "mdi:calendar-clock"
 
     @property
@@ -386,9 +390,9 @@ class WaterMeterDateSensor(JinanWaterBaseSensor):
             return str(value) if value else None
 
 
-class WaterPaymentDateSensor(JinanWaterBaseSensor):
-    _sensor_key = "payment_date"
-    _attr_name = "缴费时间"
+class PaymentDateSensor(JinanWaterBaseSensor):
+    _sensor_key = "order_payment_date"
+    _attr_name = "本期缴费时间"
     _attr_icon = "mdi:cash-check"
 
     @property
@@ -410,7 +414,7 @@ class WaterPaymentDateSensor(JinanWaterBaseSensor):
 # 实时仪表传感器（数据来源：GetYiBiaoInfo + GetDataList）
 # ============================================================
 
-class WaterUsageDetailSensor(JinanWaterBaseSensor):
+class UsageDetailSensor(JinanWaterBaseSensor):
     """用水详情传感器：固定值「图表」，明细列表存放于 graph 属性（真实列表对象）。"""
 
     _sensor_key = "usage_detail"
@@ -442,7 +446,7 @@ class WaterUsageDetailSensor(JinanWaterBaseSensor):
         return {"graph": graph_records}
 
 
-class WaterYesterdayUsageSensor(JinanWaterBaseSensor):
+class YesterdayUsageSensor(JinanWaterBaseSensor):
     """昨日用水量传感器：取日用水记录中日期最新一条的 value。"""
 
     _sensor_key = "usage_yesterday"
@@ -459,7 +463,40 @@ class WaterYesterdayUsageSensor(JinanWaterBaseSensor):
         return latest.get("value")
 
 
-class WaterOrderDetailSensor(JinanWaterBaseSensor):
+class YesterdayMeterSensor(JinanWaterBaseSensor):
+    """昨日表读数传感器：取日用水记录中日期最新一条的 ZhiDu（表读数）。"""
+
+    _sensor_key = "meter_yesterday"
+    _attr_name = "昨日表读数"
+    _attr_icon = "mdi:gauge"
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+
+    @property
+    def native_value(self):
+        records = self.gs_data.get(YIBIAO_DATA_KEY, [])
+        if not records:
+            return None
+        latest = max(records, key=lambda r: _parse_record_date(r.get("date", "")))
+        return latest.get("ZhiDu")
+
+class YesterdayReadingDate(JinanWaterBaseSensor):
+    """最新读表日期"""
+    _sensor_key = "yesterday_meter_reading_date"
+    _attr_name = "最新抄表日期"
+    _attr_icon = "mdi:calendar-clock"
+
+    @property
+    def native_value(self):
+        records = self.gs_data.get(YIBIAO_DATA_KEY, [])
+        if not records:
+            return None
+        latest = max(records, key=lambda r: _parse_record_date(r.get("date", "")))
+        date = latest.get("date")
+        if isinstance(date, str) and date.endswith(" 00"):
+            date = date[:-3]
+        return date
+
+class OrderDetailSensor(JinanWaterBaseSensor):
     """订单详情传感器：固定值「图表」，全部账单记录（已筛选/重命名）存放于 graph 属性（真实列表）。"""
 
     _sensor_key = "order_detail"
