@@ -8,7 +8,7 @@
  * 1. 零依赖单文件：不内联任何图表库，曲线用原生 SVG 手绘（原国家电网卡片内联了 700KB
  *    的 ApexCharts + Lit，这里刻意避开，便于维护和排错）。
  * 2. 数据全部来自集成实体，不做任何接口请求；日用水历史的“补齐”由集成侧持久化完成
- *    （接口只返回近 1 个月，更早的数据由集成写入 config/jinan_water/daily_history.json
+ *    （接口只返回近 1 个月，更早的数据由集成写入 HA 存储区 config/.storage/jinan_water/daily_history.json
  *    后合并进「用水详情」实体）。
  * 3. 实体 id 约定：sensor.jinan_water_<key>_<gs>，可用 entities 覆盖任意一项。
  *
@@ -26,7 +26,7 @@
  * ```
  */
 
-const CARD_VERSION = "1.1.2";
+const CARD_VERSION = "1.1.3";
 const DOMAIN = "jinan_water";
 
 /* ============================================================================
@@ -54,7 +54,7 @@ const ENTITY_SUFFIX = {
 /* 各实体用途说明（仅供阅读/排查，不参与 id 拼接） */
 const ENTITY_LABELS = {
   balance: "水费余额",
-  pending_fee: "欠费金额",
+  pending_fee: "待交金额",
   penalty_fee: "违约金",
   order_price: "本期水价",
   usage: "本期用水量",
@@ -460,6 +460,12 @@ class JinanWaterCard extends HTMLElement {
         this._cal = { year: now.getFullYear(), month: now.getMonth() + 1 };
         break;
       }
+      case "spark-click": {
+        // 点击 spark：显示与 hover 一致的 tooltip（不再跳转「日用水曲线」面板）。
+        const chart = target.querySelector("[data-chart]");
+        if (chart) this._showTooltipForChart(chart, event.clientX);
+        return;
+      }
       default:
         return;
     }
@@ -472,13 +478,8 @@ class JinanWaterCard extends HTMLElement {
     this._cal = { year: Math.floor(total / 12), month: (total % 12) + 1 };
   }
 
-  _onMouseMove(event) {
-    // 注意：图表本体是 <svg>（SVGElement），不是 HTMLElement，故用 dataset 鸭子判断，
-    // 不能用 `instanceof HTMLElement`（那样永远匹配不到，hover 会完全失效）。
-    const chart = event
-      .composedPath()
-      .find((node) => node && node.dataset && node.dataset.chart);
-    if (!chart) return;
+  /** 在图表上根据 clientX 定位最近的数据点并展示 tooltip（hover 与点击共用）。 */
+  _showTooltipForChart(chart, clientX) {
     const points = JSON.parse(chart.dataset.points || "[]");
     if (!points.length) return;
     const rect = chart.getBoundingClientRect();
@@ -488,7 +489,7 @@ class JinanWaterCard extends HTMLElement {
     if (!tooltip) return;
 
     const viewWidth = Number(chart.dataset.viewWidth) || 640;
-    const viewX = ((event.clientX - rect.left) / rect.width) * viewWidth;
+    const viewX = ((clientX - rect.left) / rect.width) * viewWidth;
     const plotLeft = Number(chart.dataset.plotLeft) || 0;
     const plotWidth = Number(chart.dataset.plotWidth) || 1;
     const step = points.length > 1 ? plotWidth / (points.length - 1) : 0;
@@ -527,6 +528,16 @@ class JinanWaterCard extends HTMLElement {
       cursor.setAttribute("x2", point.x);
       cursor.style.opacity = "1";
     }
+  }
+
+  _onMouseMove(event) {
+    // 注意：图表本体是 <svg>（SVGElement），不是 HTMLElement，故用 dataset 鸭子判断，
+    // 不能用 `instanceof HTMLElement`（那样永远匹配不到，hover 会完全失效）。
+    const chart = event
+      .composedPath()
+      .find((node) => node && node.dataset && node.dataset.chart);
+    if (!chart) return;
+    this._showTooltipForChart(chart, event.clientX);
   }
 
   _onMouseLeave() {
@@ -609,8 +620,8 @@ class JinanWaterCard extends HTMLElement {
         </div>
 
         <div class="metrics">
-          ${this._renderMetric("水费余额", balance, "wallet", "¥", false)}
-          ${this._renderMetric("欠费金额", pending, "alert", "¥", (pending ?? 0) > 0)}
+          ${this._renderMetric("预存金额", balance, "wallet", "¥", false)}
+          ${this._renderMetric("待交水费", pending, "alert", "¥", (pending ?? 0) > 0)}
           ${this._renderMetric("违约金", penalty, "gavel", "¥", (penalty ?? 0) > 0)}
         </div>
 
@@ -624,7 +635,7 @@ class JinanWaterCard extends HTMLElement {
               <div class="usage-cost">¥ ${money(currentFee)}</div>
               ${delta}
             </div>
-            <div class="usage-spark" data-action="toggle-panel" data-panel="dayChart" title="点击查看日用水曲线">
+            <div class="usage-spark" data-action="spark-click" title="点击查看该日用水详情">
               ${this._renderSparkline(recent)}
             </div>
           </div>

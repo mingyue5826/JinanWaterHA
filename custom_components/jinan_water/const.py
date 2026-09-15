@@ -86,17 +86,17 @@ ORDER_DETAIL_KEY = "order_detail"
 # ============================================================
 # 本地持久化（日用水历史）相关常量
 # 仪表接口只返回「今天往前 1 个月」的日用水数据，更早的数据需要本地累积，
-# 因此每次同步会把接口数据并入 config 下的历史文件（见 history.py）。
+# 因此每次同步会把接口数据并入 HA 原生存储 Store（见 history.py）。
 # ============================================================
 
-# 历史文件的存放目录（相对 HA 配置目录）与实际文件名。
-# 刻意放在 <config>/jinan_water/ 这样的可见目录、并用 .json 后缀，
-# 而不是 .storage 里的无扩展名文件，方便用户直接打开查看 / 备份 / 排查。
-HISTORY_DIR = "jinan_water"
-HISTORY_FILENAME = "daily_history.json"
-
-# 历史文件的结构版本（写入文件内，便于后续结构变更时做迁移）
-HISTORY_FORMAT_VERSION = 1
+# HA 原生存储（homeassistant.helpers.storage.Store）配置
+# Store 会把数据写入 <config>/.storage/<STORAGE_KEY>，由 HA 负责把 IO 调度到执行器线程、
+# 自带「先写临时文件再替换」的原子写入与 version 版本管理，比手写裸文件更符合规范。
+# 关键点：STORAGE_KEY 用「域/文件名」的形式即可让 Store 在 .storage 下创建子目录，
+# 最终文件：<config>/.storage/jinan_water/daily_history.json
+# （该用法参考既有项目 github.com/mingyue5826/tongwangas_shandong 的写法）
+STORAGE_KEY = f"{DOMAIN}/daily_history.json"
+STORAGE_VERSION = 1
 
 # 日用水历史最多保留的天数（超出后按日期裁剪最旧的记录）
 MAX_HISTORY_DAYS = 730
