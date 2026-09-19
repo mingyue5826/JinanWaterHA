@@ -131,6 +131,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.append(YesterdayReadingDate(coordinator, entry, gs))
         entities.append(OrderDetailSensor(coordinator, entry, gs))
         entities.append(RefreshTimeSensor(coordinator, entry, gs))  # 上次同步时间
+        entities.append(IntegrationStatusSensor(coordinator, entry, gs))  # 集成状态
 
     _LOGGER.info("创建了 %d 个传感器实体", len(entities))
     async_add_entities(entities)
@@ -534,3 +535,70 @@ class RefreshTimeSensor(JinanWaterBaseSensor):
         # 不使用 coordinator.last_update_success_time：最新 HA 该属性已从 DataUpdateCoordinator
         # 基类移至 TimestampDataUpdateCoordinator 子类，直接访问会 AttributeError 导致实体不可用。
         return getattr(self.coordinator, "last_sync_time", None)
+
+
+class IntegrationStatusSensor(JinanWaterBaseSensor):
+    """集成状态诊断实体：判断与本户号相关的所有接口是否全部调用通过。
+
+    状态值：正常 / 异常。
+    - 异常时额外信息列出失败的接口（含户号）、错误原因、时间与请求详情
+      （method / url / headers / body）；
+    - 账户列表（account_list）为整集成级接口，其失败计入所有户号的状态。
+    """
+
+    _sensor_key = "integration_status"
+    _attr_name = "集成状态"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def _relevant_failures(self):
+        """返回与本户号相关的接口失败记录（含账户列表）。"""
+        failures = getattr(self.coordinator, "api_failures", []) or []
+        gs = self._gs
+        return [
+            f
+            for f in failures
+            if f.get("gs") == gs or f.get("interface") == "account_list"
+        ]
+
+    @staticmethod
+    def _serialize_failure(failure):
+        """把失败记录转成可安全写入 state attributes 的纯 JSON 结构。"""
+        item = dict(failure)
+        time = item.get("time")
+        if hasattr(time, "isoformat"):
+            item["time"] = time.isoformat()
+        return item
+
+    @property
+    def native_value(self):
+        return "异常" if self._relevant_failures() else "正常"
+
+    @property
+    def icon(self):
+        return "mdi:check-circle" if self.native_value == "正常" else "mdi:alert-circle"
+
+    @property
+    def extra_state_attributes(self):
+        rel = self._relevant_failures()
+        coordinator = self.coordinator
+        attrs = {
+            "last_success_time": getattr(coordinator, "last_full_success_time", None),
+        }
+        if rel:
+            # 异常：列出失败接口清单、逐条明细（含请求 method/url/headers/body）与本次失败时间
+            attrs["last_failure_time"] = max(
+                (f.get("time") for f in rel), default=None
+            )
+            apis = []
+            for f in rel:
+                name = f.get("interface")
+                if name not in apis:
+                    apis.append(name)
+            attrs["failed_apis"] = apis
+            attrs["failed_details"] = [self._serialize_failure(f) for f in rel]
+        else:
+            # 正常：附上最近一次（全集成范围）失败时间作参考
+            attrs["last_failure_time"] = getattr(
+                coordinator, "last_any_failure_time", None
+            )
+        return attrs

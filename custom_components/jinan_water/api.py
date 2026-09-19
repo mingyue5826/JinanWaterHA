@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     APPLICATION_ID,
@@ -108,6 +109,35 @@ class JinanWaterApi:
     def __init__(self, hass, entry):
         self.hass = hass
         self.entry = entry
+        # 接口调用失败记录（供「集成状态」诊断实体读取）。每次协调器更新前会被清空。
+        self.failures = []
+
+    def _record_failure(self, interface, gs, error, url=None, body=None):
+        """记录一次接口调用失败，供「集成状态」诊断实体聚合展示。
+
+        interface: 接口标识（account_list / invoice_list / yibiao_data）
+        gs:        户号；整集成级接口（account_list）传 None
+        error:     异常对象，转 str 后存入
+        url/body:  显式覆盖请求地址 / 请求体；不传时优先取异常上挂的 request 上下文
+                   （_call_api 失败时挂在 error.request），再退化为 None
+
+        记录字段：
+            interface / gs / error / time
+            method / url / headers / body  —— 请求详情（method 目前恒为 POST）
+        """
+        # 请求上下文：_call_api 抛的异常上挂着 error.request
+        req = getattr(error, "request", None) or {}
+        record = {
+            "interface": interface,
+            "gs": gs,
+            "error": str(error),
+            "time": dt_util.utcnow(),
+            "method": req.get("method", "POST"),
+            "url": url if url is not None else req.get("url"),
+            "headers": req.get("headers"),
+            "body": body if body is not None else req.get("body"),
+        }
+        self.failures.append(record)
 
     def _get_auth_headers(self):
         """构造通用的 API 认证请求头。"""
@@ -126,34 +156,70 @@ class JinanWaterApi:
             "Content-Type": "application/json",
         }
 
-    async def _call_api(self, url, body="{}"):
+    async def _call_api(self, url, body="{}", method="POST"):
         """发送 API 请求并返回解析后的 JSON 数据。
 
-        body 为已序列化的 JSON 字符串；不传时默认发送空对象 "{}"（兼容既有接口）。
-        请求失败或业务状态异常时抛出 UpdateFailed，由协调器统一处理。
+        url:    完整请求地址（含 query string）
+        body:   已序列化的 JSON 字符串；不传时默认发送空对象 "{}"（兼容既有接口）
+        method: 请求方法，默认 POST（当前所有济南水务接口均为 POST）
+
+        请求失败或业务状态异常时抛出 UpdateFailed，异常对象上挂有 request 上下文
+        （method / url / headers / body），供「集成状态」诊断实体展示。
         """
         session = async_get_clientsession(self.hass)
         headers = self._get_auth_headers()
 
         async with session.post(url, headers=headers, data=body) as response:
             if response.status != 200:
-                raise UpdateFailed(f"API 请求失败，HTTP 状态码: {response.status}")
+                raise self._api_error(
+                    f"API 请求失败，HTTP 状态码: {response.status}",
+                    method,
+                    url,
+                    headers,
+                    body,
+                )
 
             result = await response.json()
 
             state = result.get("state") or result.get("State")
             if not state:
-                raise UpdateFailed(
-                    f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}"
+                raise self._api_error(
+                    f"API 请求失败: {result.get('messageText', result.get('Message', '未知错误'))}",
+                    method,
+                    url,
+                    headers,
+                    body,
                 )
 
             return result
 
+    @staticmethod
+    def _api_error(message, method, url, headers, body):
+        """构造带请求上下文的 UpdateFailed（供诊断实体展示请求详情）。"""
+        error = UpdateFailed(message)
+        # 挂到属性而非写进 message，保持 error 文案与日志简洁；_record_failure 会按需取出。
+        error.request = {
+            "method": method,
+            "url": url,
+            "headers": headers,
+            "body": body,
+        }
+        return error
+
     async def fetch_account_list(self, phone_num):
-        """获取账户级数据（用户绑定的所有户号信息）。失败抛出 UpdateFailed。"""
+        """获取账户级数据（用户绑定的所有户号信息）。
+
+        失败不再整体抛出 UpdateFailed（否则所有实体会变 unavailable）；改为记录失败、
+        返回空列表，由「集成状态」实体汇总展示。
+        """
         url = f"{API_BASE_URL}{API_ENDPOINT}?PhoneNum={phone_num}"
-        result = await self._call_api(url)
-        return result.get("data") or []
+        try:
+            result = await self._call_api(url)
+            return result.get("data") or []
+        except Exception as error:
+            _LOGGER.warning("获取账户列表失败: %s", error)
+            self._record_failure("account_list", None, error, url=url)
+            return []
 
     async def fetch_invoice_list(self, gs):
         """获取单个户号的账单级数据（全部记录，供订单详情传感器使用）。
@@ -166,6 +232,7 @@ class JinanWaterApi:
             return result.get("data") or []
         except Exception as error:
             _LOGGER.warning("获取户号 %s 账单失败: %s", gs, error)
+            self._record_failure("invoice_list", gs, error, url=url)
             return []
 
     async def fetch_yibiao_data(self, gs):
@@ -181,7 +248,6 @@ class JinanWaterApi:
         try:
             today = datetime.now()
             month_ago = today - relativedelta(months=1)
-
             yibiao_body = {
                 "WhereList": [
                     {
@@ -203,9 +269,8 @@ class JinanWaterApi:
             }
 
             yibiao_url = f"{API_BASE_URL}{API_ENDPOINT_GetYiBiaoInfo}"
-            yibiao_result = await self._call_api(
-                yibiao_url, json.dumps(yibiao_body, ensure_ascii=False)
-            )
+            yibiao_body_str = json.dumps(yibiao_body, ensure_ascii=False)
+            yibiao_result = await self._call_api(yibiao_url, yibiao_body_str)
 
             json_data = yibiao_result.get("jsonData")
             if not json_data:
@@ -222,9 +287,8 @@ class JinanWaterApi:
                 return []
 
             data_list_url = f"{API_BASE_URL}{API_ENDPOINT_GetDataList}"
-            data_result = await self._call_api(
-                data_list_url, json.dumps(yibiao_info, ensure_ascii=False)
-            )
+            yibiao_info_str = json.dumps(yibiao_info, ensure_ascii=False)
+            data_result = await self._call_api(data_list_url, yibiao_info_str)
 
             data = data_result.get("data")
             if not data:
@@ -237,6 +301,13 @@ class JinanWaterApi:
             return data
         except Exception as error:
             _LOGGER.warning("获取户号 %s 仪表数据失败: %s", gs, error)
+            # 两步串行，失败点不固定：请求上下文由 _call_api 挂在异常上；
+            # 若异常不带上下文（如 json 解析失败），则回退到实际已发出的最后一个请求。
+            last_body = yibiao_info_str if yibiao_info else yibiao_body_str
+            last_url = data_list_url if yibiao_info else yibiao_url
+            self._record_failure(
+                "yibiao_data", gs, error, url=last_url, body=last_body
+            )
             return []
 
     def transform_invoice_records(self, records):

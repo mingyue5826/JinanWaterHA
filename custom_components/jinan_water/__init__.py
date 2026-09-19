@@ -108,6 +108,10 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
         # 最近一次成功同步的时间（UTC，带时区），供「上次同步时间」传感器读取。
         # 自行记录而不依赖 HA 内部属性（不同 HA 版本该属性所在位置不同）。
         self.last_sync_time = None
+        # 「集成状态」诊断实体所需：本轮各接口失败记录 + 最近一次全量成功/任意失败时间
+        self.api_failures = []
+        self.last_full_success_time = None
+        self.last_any_failure_time = None
         _LOGGER.info("协调器初始化完成")
 
     def async_update_listeners(self):
@@ -122,6 +126,8 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
         selected_gs = data.get(CONF_SELECTED_GS, [])
 
         try:
+            # 每轮更新开始前清空上一轮的接口失败记录，保证状态只反映本轮结果
+            self.api.failures.clear()
             # 步骤 1: 获取账户级数据
             account_list = await self.api.fetch_account_list(phone_num)
 
@@ -176,11 +182,20 @@ class JinanWaterCoordinator(DataUpdateCoordinator):
                 order_list = self.api.transform_invoice_records(records)
                 merged_data.setdefault(gs, {})[ORDER_DETAIL_KEY] = order_list
 
-            # 全部数据获取成功，记录本次同步时间（UTC，带时区）
-            self.last_sync_time = dt_util.utcnow()
+            # 汇总本轮各接口调用结果，供「集成状态」诊断实体使用
+            self.api_failures = list(self.api.failures)
+            current_time = dt_util.utcnow()
+            if self.api_failures:
+                self.last_any_failure_time = current_time
+            else:
+                self.last_full_success_time = current_time
+            self.last_sync_time = current_time
             return merged_data
 
         except UpdateFailed:
+            # 未知异常导致整体失败：仍把已记录的接口失败同步给状态实体
+            self.api_failures = list(self.api.failures)
             raise
         except Exception as error:
+            self.api_failures = list(self.api.failures)
             raise UpdateFailed(f"获取水务数据时出错: {error}")
