@@ -1,7 +1,7 @@
 {
   "domain": "jinan_water",
   "name": "济南水务",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "config_flow": true,
   "iot_class": "cloud_polling",
   "dependencies": [],
