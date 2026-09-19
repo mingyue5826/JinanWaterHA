@@ -109,3 +109,29 @@ MAX_HISTORY_DAYS = 730
 
 # 手动刷新数据服务
 SERVICE_REFRESH_DATA = "refresh_data"
+
+# ============================================================
+# 前端卡片（Lovelace 自定义卡片）相关常量
+# 卡片随集成分发，由 frontend.py 在集成启动时自动注册，
+# 用户无需手动复制 js、也无需手动在「设置 → 仪表盘 → 资源」里添加 URL
+# ============================================================
+
+# 卡片 js 文件名（随集成发布在 custom_components/jinan_water/www/ 下）
+CARD_JS_FILENAME = "jinan-water-card.js"
+
+# 卡片通过 HA HTTP 静态路径对外暴露的 URL
+# 浏览器可直接访问验证：http(s)://<HA地址>/jinan_water/jinan-water-card.js
+CARD_URL_PATH = f"/{DOMAIN}/{CARD_JS_FILENAME}"
+
+# 卡片的自定义元素名，仪表盘里写 type: custom:jinan-water-card
+CARD_ELEMENT_NAME = "jinan-water-card"
+
+# 旧的手工部署地址前缀
+# 用于识别用户此前手动添加到 Lovelace 的资源，自动迁移到新的静态路径，
+# 避免同一张卡片被加载两次（表现为卡片行为异常、改动不生效）
+CARD_LEGACY_URL_PREFIXES = (
+    "/local/community/jinan-water-card/",
+    "/local/jinan_water/",
+    "/local/jinan-water-card.js",
+    "/hacsfiles/jinan-water-card/",
+)

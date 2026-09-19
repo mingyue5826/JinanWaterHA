@@ -1,0 +1,42 @@
+name: Tag Version Check
+
+# 在打 tag 时强制校验：tag 名（忽略开头的 v / V / -）必须与
+# custom_components/jinan_water/manifest.json 的 version 完全一致，
+# 否则让 CI 失败，release 不会产出。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  tag-check:
+    name: Verify tag matches manifest version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare tag with manifest version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - "$TAG" <<'PY'
+          import json, re, sys, pathlib
+
+          tag = sys.argv[1]
+          path = pathlib.Path("custom_components/jinan_water/manifest.json")
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          repo_version = manifest.get("version")
+
+          # 忽略 tag 开头的 v / V / -（v1.0.0 / V-1.0.0 / -1.0.0 都归一为 1.0.0）
+          tag_clean = re.sub(r"^[vV-]+", "", tag)
+
+          if tag_clean != repo_version:
+              print(f"::error::tag '{tag}' 清理后为 '{tag_clean}'，与 manifest.json 的 version '{repo_version}' 不一致")
+              print(f"::error::请在打 tag 前把 manifest.json 的 version 改成 '{tag_clean}'，或重新打正确的 tag")
+              sys.exit(1)
+          print(f"✔ tag {tag} 与 manifest version {repo_version} 一致")
+          PY

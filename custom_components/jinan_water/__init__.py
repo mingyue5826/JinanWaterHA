@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import JinanWaterApi
+from .frontend import async_remove_card, async_setup_card
 from .history import DailyHistoryStore
 from .const import (
     DOMAIN,
@@ -28,8 +29,19 @@ PLATFORMS = ["sensor", "button"]
 
 
 async def async_setup(hass: HomeAssistant, config):
-    """集成初始化入口。"""
+    """集成初始化入口。
+
+    除初始化数据外，还负责把随集成分发的前端卡片（www/jinan-water-card.js）
+    自动注册到 HA：注册 HTTP 静态路径 + 写入 Lovelace 资源表。
+    这样用户装完集成重启后就能直接用卡片，不用再手工复制 js、手工添加资源 URL。
+    """
     hass.data.setdefault(DOMAIN, {})
+
+    try:
+        await async_setup_card(hass)
+    except Exception as error:  # 卡片注册失败不应影响集成本体可用
+        _LOGGER.warning("注册前端卡片资源失败（不影响集成本体）: %s", error)
+
     return True
 
 
@@ -59,6 +71,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
     """选项更新回调。"""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """删除配置条目后的清理钩子（HA 官方 hook）。
+
+    只有最后一个条目被删掉时才移除卡片资源——多账号场景下删其中一个，卡片还得继续能用。
+    注：HA 调用本函数时该 entry 已经从 hass.config_entries 里摘掉了，
+    所以 async_entries(DOMAIN) 为空就代表这是最后一个。
+    """
+    if hass.config_entries.async_entries(DOMAIN):
+        _LOGGER.debug("仍有其它配置条目，保留卡片资源")
+        return
+
+    try:
+        await async_remove_card(hass)
+    except Exception as error:  # 清理失败不影响条目删除
+        _LOGGER.warning("移除前端卡片资源失败: %s", error)
 
 
 class JinanWaterCoordinator(DataUpdateCoordinator):

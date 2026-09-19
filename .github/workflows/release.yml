@@ -1,0 +1,214 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create HACS Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 与 tag-check.yml 同一套归一化：忽略开头的 v / V / -（如 V-1.0.0 → 1.0.0）
+      - name: Get version from tag
+        id: version
+        run: echo "version=$(echo "$GITHUB_REF_NAME" | sed -E 's/^[vV-]+//')" >> "$GITHUB_OUTPUT"
+
+      # 严格门禁：tag 必须与 manifest.json 的 version 一致，否则直接失败、不发布。
+      # （之前这里是"自动改写为 tag 版本"，但那会掩盖不一致；现在改为强制对齐——
+      #  打 tag 前请先把 manifest.json 的 version 改成对应版本，或修正 tag 名。）
+      - name: Verify tag matches manifest version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - "$TAG" <<'PY'
+          import json, re, sys, pathlib
+
+          tag = sys.argv[1]
+          path = pathlib.Path("custom_components/jinan_water/manifest.json")
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          repo_version = manifest.get("version")
+
+          # 忽略 tag 开头的 v / V / -（如 v1.0.0 / V-1.0.0 / -1.0.0 都归一为 1.0.0）
+          tag_clean = re.sub(r"^[vV-]+", "", tag)
+
+          if tag_clean != repo_version:
+              print(f"::error::tag '{tag}' 清理后为 '{tag_clean}'，与 manifest.json 的 version '{repo_version}' 不一致")
+              print("::error::请先发布前把 manifest.json 的 version 改成 '{tag_clean}'，或重新打正确的 tag")
+              sys.exit(1)
+          print(f"::notice::tag {tag} 与 manifest version {repo_version} 一致，打包版本 = {repo_version}")
+          PY
+
+      # hacs.json 开了 zip_release 后，HACS 会把这个 zip 直接解压到
+      # <config>/custom_components/jinan_water/ ，所以 zip 内部必须"平铺"，
+      # 不能再套一层 jinan_water/ 目录。
+      - name: Package for HACS (flat layout)
+        run: |
+          cd custom_components/jinan_water
+          zip -r -q ../../jinan_water.zip . -x '*__pycache__/*' '*.pyc' '*.DS_Store'
+          cd ../..
+
+      # 手动安装的用户习惯把整个 jinan_water 目录丢进 config/custom_components/ ，
+      # 所以另出一个带顶层目录的 zip。HACS 只认 hacs.json 里 filename 指定的那个，不会混淆。
+      - name: Package for manual install (with top folder)
+        run: |
+          cd custom_components
+          zip -r -q ../jinan_water-manual.zip jinan_water/ -x '*__pycache__/*' '*.pyc' '*.DS_Store'
+          cd ..
+
+      - name: Verify packages
+        run: |
+          python3 - <<'PY'
+          import json, sys, zipfile
+
+          errors = []
+
+          def names_of(path):
+              with zipfile.ZipFile(path) as zf:
+                  return zf.namelist()
+
+          def show(path):
+              print(f"\n--- {path} ---")
+              for n in sorted(names_of(path)):
+                  print("   ", n)
+
+          # ---------- HACS 包：必须平铺 ----------
+          hacs = names_of("jinan_water.zip")
+          show("jinan_water.zip")
+
+          if not any(n == "manifest.json" for n in hacs):
+              errors.append("HACS 包根目录缺 manifest.json（必须平铺，不能套 jinan_water/ 目录）")
+          if any(n.startswith("jinan_water/") for n in hacs):
+              errors.append("HACS 包里出现了 jinan_water/ 顶层目录，HACS 解压后会多套一层")
+          if not any(n == "www/jinan-water-card.js" for n in hacs):
+              errors.append("HACS 包缺 www/jinan-water-card.js，安装后卡片不会自动注册")
+          if any("__pycache__" in n or n.endswith(".pyc") for n in hacs):
+              errors.append("HACS 包混进了 __pycache__ / .pyc")
+
+          with zipfile.ZipFile("jinan_water.zip") as zf:
+              manifest = json.loads(zf.read("manifest.json"))
+          print(f"\nHACS 包内集成版本 = {manifest['version']}")
+          expected = "${{ steps.version.outputs.version }}"
+          if manifest["version"] != expected:
+              errors.append(f"HACS 包内版本 {manifest['version']} 与 tag {expected} 不一致")
+          if not any(n == "__init__.py" for n in hacs):
+              errors.append("HACS 包根目录缺 __init__.py")
+
+          # ---------- 手动安装包：必须带顶层目录 ----------
+          manual = names_of("jinan_water-manual.zip")
+          show("jinan_water-manual.zip")
+
+          if not any(n == "jinan_water/manifest.json" for n in manual):
+              errors.append("手动安装包缺 jinan_water/ 顶层目录（用户要整体解压到 custom_components/）")
+          if not any(n == "jinan_water/www/jinan-water-card.js" for n in manual):
+              errors.append("手动安装包缺 www/jinan-water-card.js")
+          if any("__pycache__" in n or n.endswith(".pyc") for n in manual):
+              errors.append("手动安装包混进了 __pycache__ / .pyc")
+
+          if errors:
+              print("\n::error::打包校验失败：")
+              for e in errors:
+                  print(f"::error::  - {e}")
+              sys.exit(1)
+          print("\n打包校验全部通过")
+          PY
+
+          echo "SHA256 (jinan_water.zip):        $(sha256sum jinan_water.zip)"
+          echo "SHA256 (jinan_water-manual.zip): $(sha256sum jinan_water-manual.zip)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ github.ref_name }}"
+          body: |
+            ## 济南水务 ${{ github.ref_name }}
+
+            济南水务 Home Assistant 集成
+
+            ### 方式一：HACS（推荐）
+
+            [![Open your Home Assistant instance and add this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=mingyue5826&repository=JinanWaterHA&category=integration)
+
+            点上面的按钮一键添加，或者手动操作：
+
+            1. 在 Home Assistant 中打开 **HACS**。
+            2. 进入 **集成** → 右上角菜单（⋮）→ **自定义仓库**。
+            3. 添加仓库 `https://github.com/mingyue5826/JinanWaterHA`，类别选 **集成（Integration）**。
+            4. 在 **济南水务** 卡片中点击 **下载**。
+            5. 按提示 **重启** Home Assistant。
+
+            > 仪表盘卡片**已内置在集成里**（`jinan-water-card.js`），重启后自动注册为 Lovelace 资源，
+            > **无需手工复制 js、也无需手工添加资源 URL**。
+
+            ### 方式二：手动安装
+
+            1. 下载 **`jinan_water-manual.zip`**（注意别下 `jinan_water.zip`，那个是给 HACS 用的平铺包）。
+            2. 解压后得到 `jinan_water/` 目录，**整个目录**复制到：
+
+               `config/custom_components/jinan_water/`
+
+               ⚠️ 请确认里面的 `www/` 目录（含 `jinan-water-card.js`）也一并复制，否则卡片无法自动注册。
+
+            3. **重启** Home Assistant。
+
+          files: |
+            jinan_water.zip
+            jinan_water-manual.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+
+      # HACS 只有在安装"某个 release/tag 版本"时才走 zip_release；
+      # 用户若选择安装默认分支，HACS 仍会逐文件下载仓库 tree，
+      # 拿到的就是仓库里提交的 manifest。这一步把版本同步回去，堵上这个缺口。
+      - name: Sync manifest version to default branch
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, subprocess, sys
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["BRANCH"]
+          path = "custom_components/jinan_water/manifest.json"
+          local = open(path, "rb").read()
+
+          try:
+              meta = json.loads(
+                  subprocess.run(
+                      ["gh", "api", f"repos/{repo}/contents/{path}?ref={branch}"],
+                      capture_output=True, text=True, check=True,
+                  ).stdout
+              )
+          except subprocess.CalledProcessError as err:
+              print(f"::warning::读取默认分支上的 manifest 失败：{err.stderr.strip()}")
+              sys.exit(0)
+
+          remote = base64.b64decode(meta["content"] + "==")
+          if remote == local:
+              print(f"默认分支上的 manifest 已是 {os.environ['VERSION']}，无需提交")
+              sys.exit(0)
+
+          subprocess.run(
+              [
+                  "gh", "api", "-X", "PUT",
+                  f"repos/{repo}/contents/{path}",
+                  "-f", f"message=chore(release): bump manifest version to {os.environ['VERSION']} [skip ci]",
+                  "-f", f"content={base64.b64encode(local).decode()}",
+                  "-f", f"sha={meta['sha']}",
+                  "-f", f"branch={branch}",
+              ],
+              check=True,
+          )
+          print(f"已把 manifest 版本 {os.environ['VERSION']} 同步到默认分支 {branch}")
+          PY
